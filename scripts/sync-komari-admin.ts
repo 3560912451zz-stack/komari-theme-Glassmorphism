@@ -10,7 +10,6 @@ const sourceDist = resolve(sourceRoot, 'dist')
 const targetDir = resolve(projectRoot, 'public', 'admin-app')
 const overrideCss = resolve(projectRoot, 'scripts', 'assets', 'glass-admin.css')
 const charsetMarker = '<meta charset="UTF-8" />'
-const pwaManifestPattern = /<link[^>]+href="\/admin-app\/manifest\.webmanifest"[^>]*>/g
 const pwaRegisterPattern = /<script[^>]+id="vite-plugin-pwa:register-sw"[^>]*><\/script>/g
 const workboxFilenamePattern = /^workbox-[\w-]+\.js$/
 const runtimeAssetPathRewrites = [
@@ -19,6 +18,36 @@ const runtimeAssetPathRewrites = [
 ] as const
 const runtimeAssetReferencePattern = /assets\/(?:flags|logo)\//g
 const adminCssVersion = createHash('sha256').update(readFileSync(overrideCss)).digest('hex').slice(0, 12)
+
+interface WebAppManifest {
+  icons?: Array<Record<string, unknown> & { src?: unknown }>
+}
+
+function normalizePwaManifests(directory: string): number {
+  const filenames = ['manifest.json', 'manifest.webmanifest']
+  const existing = filenames.filter(filename => existsSync(resolve(directory, filename)))
+  if (!existing.length)
+    return 0
+
+  let canonicalManifest: WebAppManifest | null = null
+  for (const filename of existing) {
+    const path = resolve(directory, filename)
+    const manifest = JSON.parse(readFileSync(path, 'utf8')) as WebAppManifest
+    if (Array.isArray(manifest.icons)) {
+      manifest.icons = manifest.icons.map((icon) => {
+        if (typeof icon.src !== 'string' || !icon.src.startsWith('/assets/'))
+          return icon
+        return { ...icon, src: `/admin-app${icon.src}` }
+      })
+    }
+    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`)
+    canonicalManifest ??= manifest
+  }
+
+  if (!existsSync(resolve(directory, 'manifest.json')) && canonicalManifest)
+    writeFileSync(resolve(directory, 'manifest.json'), `${JSON.stringify(canonicalManifest, null, 2)}\n`)
+  return existing.length
+}
 
 function rewriteRuntimeAssetPaths(directory: string): number {
   let replacements = 0
@@ -88,8 +117,11 @@ cpSync(sourceDist, targetDir, { recursive: true })
 
 const rewrittenRuntimeAssetPaths = rewriteRuntimeAssetPaths(targetDir)
 const runtimeAssetReferences = countRuntimeAssetReferences(targetDir)
+const pwaManifestCount = normalizePwaManifests(targetDir)
 if (runtimeAssetReferences === 0)
   throw new Error('komari-web build output no longer contains runtime flag or OS logo asset references')
+if (pwaManifestCount === 0)
+  throw new Error('komari-web build output no longer contains a PWA manifest')
 
 const indexPath = resolve(targetDir, 'index.html')
 let html = readFileSync(indexPath, 'utf8')
@@ -99,9 +131,8 @@ if (!html.includes(charsetMarker))
 const bridge = `<script>;(()=>{let t='';try{t=sessionStorage.getItem('komariOfficialAppRoute')||'';if(t)sessionStorage.removeItem('komariOfficialAppRoute')}catch(e){console.warn('[Glassmorphism] Session storage is unavailable.',e)}if(!t){try{t=new URL(location.href).searchParams.get('__komari_route')||''}catch{}}if(t&&/^\\/(admin|terminal|manage)(\\/|\\?|#|$)/.test(t))history.replaceState(null,'',t)})();</script><link rel="stylesheet" href="/admin-app/glass-admin.css?v=${adminCssVersion}">`
 html = html.replace(charsetMarker, `${charsetMarker}${bridge}`)
 
-// The official PWA only controls /admin-app/, while the bridge restores /admin and
-// /terminal before React boots. Keeping that worker adds stale-cache risk without
-// providing working offline navigation for the real routes.
+// Keep install metadata, but remove the service worker: it only controls /admin-app/
+// and can serve stale admin assets after the bridge restores /admin or /terminal.
 html = html.replace(pwaRegisterPattern, '')
 for (const filename of ['registerSW.js', 'sw.js'])
   rmSync(resolve(targetDir, filename), { force: true })
@@ -129,4 +160,4 @@ writeFileSync(resolve(targetDir, 'komari-admin-source.json'), `${JSON.stringify(
   synced_at: new Date().toISOString(),
 }, null, 2)}\n`)
 
-console.log(`[sync-komari-admin] Synced complete admin app from ${sourceRoot} (${runtimeAssetReferences} runtime asset paths found, ${rewrittenRuntimeAssetPaths} rewritten)`)
+console.log(`[sync-komari-admin] Synced complete admin app from ${sourceRoot} (${runtimeAssetReferences} runtime asset paths found, ${rewrittenRuntimeAssetPaths} rewritten, ${pwaManifestCount} PWA manifest normalized)`)
