@@ -4,8 +4,8 @@ import type { NodeData } from '@/stores/nodes'
 import type { CurrencyCode, ExchangeRateSource } from '@/utils/financeHelper'
 import type { TopNodeMetric } from '@/utils/nodeMetricsHelper'
 import { Icon } from '@iconify/vue'
-import { useNow } from '@vueuse/core'
-import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
+import { useEventListener, useNow, usePreferredReducedMotion } from '@vueuse/core'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import NodeEarthGlobe from '@/components/NodeEarthGlobe.vue'
 import { CardX } from '@/components/ui/card-x'
 import { DataTooltip } from '@/components/ui/data-tooltip'
@@ -58,10 +58,21 @@ interface OnlineStats {
   highLoadNodes: NodeData[]
 }
 
+interface EarthFrameRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
 const props = defineProps<{
   nodes?: NodeData[]
   globeNodes?: NodeData[]
   transitionKey?: string
+  immersive?: boolean
+}>()
+const emit = defineEmits<{
+  'update:immersive': [immersive: boolean]
 }>()
 const appStore = useAppStore()
 const nodesStore = useNodesStore()
@@ -76,6 +87,14 @@ const financeCurrency = ref<CurrencyCode>('CNY')
 const excludeFreeNodes = ref(true)
 const financeDetailsOpen = ref(false)
 const currentTime = useNow({ interval: 1000 })
+const preferredReducedMotion = usePreferredReducedMotion()
+const earthPlaceholderRef = ref<HTMLElement | null>(null)
+const earthStageRef = ref<HTMLElement | null>(null)
+const earthMotionFrameRef = ref<HTMLElement | null>(null)
+const isEarthDetached = ref(false)
+const isEarthExpanded = ref(false)
+const suppressEarthStageTransition = ref(false)
+const earthTiledFullscreenFrameSize = ref<{ height: number, width: number } | null>(null)
 const summaryNodes = computed(() => props.nodes ?? nodesStore.visibleNodes)
 const summaryTransitionKey = computed(() => props.transitionKey ?? nodesStore.visibleNodes.length)
 const metricSwitchTransitionProps = computed(() => ({
@@ -741,6 +760,352 @@ const cardGridClass = computed(() => {
     ? 'h-auto -mt-42 md:mt-0 col-span-12 row-start-3 z-9 md:h-auto md:col-span-6 md:row-start-1 grid grid-cols-12 auto-rows-[5rem] md:auto-rows-[7rem] gap-2'
     : 'h-42 -mt-42 md:mt-0 col-span-12 row-start-3 z-9 md:h-auto md:col-span-6 md:row-start-1 grid grid-cols-12 grid-rows-2 gap-2'
 })
+const earthMotionAllowed = computed(() => (
+  !appStore.disablePageAnimation && preferredReducedMotion.value !== 'reduce'
+))
+const earthStageState = computed(() => isEarthDetached.value ? 'fullscreen' : 'inline')
+const earthPlaceholderClass = computed(() => [
+  isTiledEarth.value ? 'earth-stage-placeholder--tiled' : 'earth-stage-placeholder--globe',
+  `earth-stage-placeholder--${appStore.earthRenderer}`,
+])
+const earthStageStyle = computed<Record<string, string>>(() => ({
+  '--earth-immersive-duration': `${UI_CONFIG.motion.earthImmersiveDurationMs}ms`,
+  '--earth-immersive-easing': UI_CONFIG.motion.earthImmersiveEasing,
+}))
+const earthMotionFrameStyle = computed<Record<string, string> | undefined>(() => {
+  const size = earthTiledFullscreenFrameSize.value
+  if (!isEarthDetached.value || !isTiledEarth.value || !size)
+    return undefined
+
+  return {
+    height: `${size.height}px`,
+    width: `${size.width}px`,
+  }
+})
+
+let earthTransitionSequence = 0
+let earthFrameAnimation: Animation | null = null
+let documentScrollLocked = false
+let previousBodyOverflow = ''
+let previousDocumentOverflow = ''
+let previousDocumentScrollbarGutter = ''
+
+function toEarthFrameRect(rect: DOMRect): EarthFrameRect {
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
+function lockDocumentScroll() {
+  if (documentScrollLocked)
+    return
+
+  documentScrollLocked = true
+  previousBodyOverflow = document.body.style.overflow
+  previousDocumentOverflow = document.documentElement.style.overflow
+  previousDocumentScrollbarGutter = document.documentElement.style.scrollbarGutter
+  document.documentElement.style.scrollbarGutter = 'stable'
+  document.body.style.overflow = 'hidden'
+  document.documentElement.style.overflow = 'hidden'
+}
+
+function unlockDocumentScroll() {
+  if (!documentScrollLocked)
+    return
+
+  document.body.style.overflow = previousBodyOverflow
+  document.documentElement.style.overflow = previousDocumentOverflow
+  document.documentElement.style.scrollbarGutter = previousDocumentScrollbarGutter
+  documentScrollLocked = false
+}
+
+function getEarthFrame(): HTMLElement | null {
+  return earthMotionFrameRef.value
+}
+
+function updateTiledFullscreenFrameSize(placeholderRect: EarthFrameRect) {
+  if (!isTiledEarth.value || placeholderRect.width <= 0 || placeholderRect.height <= 0) {
+    earthTiledFullscreenFrameSize.value = null
+    return
+  }
+
+  const viewportPadding = 32
+  const availableWidth = Math.max(1, Math.min(
+    window.innerWidth - viewportPadding,
+    window.innerWidth * 0.88,
+    1024,
+  ))
+  const availableHeight = Math.max(1, Math.min(
+    window.innerHeight - viewportPadding,
+    window.innerHeight * 0.68,
+  ))
+  const aspectRatio = placeholderRect.width / placeholderRect.height
+  const width = Math.min(availableWidth, availableHeight * aspectRatio)
+  earthTiledFullscreenFrameSize.value = {
+    height: width / aspectRatio,
+    width,
+  }
+}
+
+function getFlipTransform(rect: EarthFrameRect, baseRect: EarthFrameRect): string {
+  if (baseRect.width <= 0 || baseRect.height <= 0)
+    return 'none'
+
+  const translateX = rect.left - baseRect.left
+  const translateY = rect.top - baseRect.top
+  const scaleX = rect.width / baseRect.width
+  const scaleY = rect.height / baseRect.height
+  return `translate3d(${translateX}px, ${translateY}px, 0) scale(${scaleX}, ${scaleY})`
+}
+
+function cancelEarthFrameAnimation() {
+  earthFrameAnimation?.cancel()
+  earthFrameAnimation = null
+}
+
+function createEarthFrameAnimation(
+  frame: HTMLElement,
+  fromRect: EarthFrameRect,
+  toRect: EarthFrameRect,
+  baseRect: EarthFrameRect,
+): Animation {
+  cancelEarthFrameAnimation()
+  const animation = frame.animate(
+    [
+      { transform: getFlipTransform(fromRect, baseRect) },
+      { transform: getFlipTransform(toRect, baseRect) },
+    ],
+    {
+      duration: UI_CONFIG.motion.earthImmersiveDurationMs,
+      easing: UI_CONFIG.motion.earthImmersiveEasing,
+      fill: 'both',
+    },
+  )
+  animation.pause()
+  animation.currentTime = 0
+  earthFrameAnimation = animation
+  return animation
+}
+
+function waitForEarthFrameAnimation(animation: Animation): Promise<void> {
+  return new Promise((resolve) => {
+    let completed = false
+    let fallbackTimer: number | undefined
+    let handleFinish: (() => void) | undefined
+    const finish = () => {
+      if (completed)
+        return
+      completed = true
+      if (fallbackTimer !== undefined)
+        window.clearTimeout(fallbackTimer)
+      if (handleFinish) {
+        animation.removeEventListener('finish', handleFinish)
+        animation.removeEventListener('cancel', handleFinish)
+      }
+      resolve()
+    }
+    handleFinish = finish
+    fallbackTimer = window.setTimeout(finish, UI_CONFIG.motion.earthImmersiveDurationMs + 100)
+    animation.addEventListener('finish', handleFinish, { once: true })
+    animation.addEventListener('cancel', handleFinish, { once: true })
+  })
+}
+
+function forceEarthInline() {
+  earthTransitionSequence += 1
+  const frame = getEarthFrame()
+  if (frame)
+    frame.style.visibility = 'hidden'
+  cancelEarthFrameAnimation()
+  suppressEarthStageTransition.value = true
+  isEarthExpanded.value = false
+  isEarthDetached.value = false
+  earthTiledFullscreenFrameSize.value = null
+  unlockDocumentScroll()
+  void nextTick(() => {
+    getEarthFrame()?.style.removeProperty('visibility')
+    suppressEarthStageTransition.value = false
+  })
+}
+
+async function enterEarthImmersive() {
+  const stage = earthStageRef.value
+  const frame = getEarthFrame()
+  const placeholder = earthPlaceholderRef.value
+  if (!showEarth.value || !stage || !frame || !placeholder) {
+    emit('update:immersive', false)
+    return
+  }
+
+  const transitionSequence = ++earthTransitionSequence
+  const wasDetached = isEarthDetached.value
+  const fromRect = toEarthFrameRect(frame.getBoundingClientRect())
+  const placeholderRect = toEarthFrameRect(placeholder.getBoundingClientRect())
+  cancelEarthFrameAnimation()
+
+  if (!wasDetached) {
+    updateTiledFullscreenFrameSize(placeholderRect)
+    frame.style.visibility = 'hidden'
+    suppressEarthStageTransition.value = true
+    isEarthExpanded.value = false
+    isEarthDetached.value = true
+  }
+
+  lockDocumentScroll()
+
+  await nextTick()
+  if (transitionSequence !== earthTransitionSequence || !props.immersive)
+    return
+
+  const teleportedStage = earthStageRef.value
+  const teleportedFrame = getEarthFrame()
+  if (!teleportedStage || !teleportedFrame)
+    return
+
+  const fullRect = toEarthFrameRect(teleportedFrame.getBoundingClientRect())
+  if (!earthMotionAllowed.value) {
+    suppressEarthStageTransition.value = false
+    isEarthExpanded.value = true
+    teleportedFrame.style.removeProperty('visibility')
+    return
+  }
+
+  const animation = createEarthFrameAnimation(teleportedFrame, fromRect, fullRect, fullRect)
+  if (!wasDetached) {
+    suppressEarthStageTransition.value = false
+    await nextTick()
+    void teleportedStage.offsetWidth
+  }
+
+  if (transitionSequence !== earthTransitionSequence || !props.immersive)
+    return
+
+  isEarthExpanded.value = true
+  teleportedFrame.style.removeProperty('visibility')
+  animation.play()
+  void waitForEarthFrameAnimation(animation).then(() => {
+    if (earthFrameAnimation !== animation || !props.immersive)
+      return
+    earthFrameAnimation = null
+    animation.cancel()
+  })
+}
+
+async function exitEarthImmersive() {
+  const transitionSequence = ++earthTransitionSequence
+
+  if (!isEarthDetached.value) {
+    unlockDocumentScroll()
+    return
+  }
+
+  const stage = earthStageRef.value
+  const frame = getEarthFrame()
+  const placeholder = earthPlaceholderRef.value
+  if (!stage || !frame || !placeholder || !earthMotionAllowed.value) {
+    forceEarthInline()
+    return
+  }
+
+  const fromRect = toEarthFrameRect(frame.getBoundingClientRect())
+  cancelEarthFrameAnimation()
+  const fullRect = toEarthFrameRect(frame.getBoundingClientRect())
+  const inlineRect = toEarthFrameRect(placeholder.getBoundingClientRect())
+  const animation = createEarthFrameAnimation(frame, fromRect, inlineRect, fullRect)
+  suppressEarthStageTransition.value = false
+  isEarthExpanded.value = false
+  frame.style.removeProperty('visibility')
+  animation.play()
+
+  await waitForEarthFrameAnimation(animation)
+  if (transitionSequence !== earthTransitionSequence || props.immersive)
+    return
+
+  frame.style.visibility = 'hidden'
+  cancelEarthFrameAnimation()
+  suppressEarthStageTransition.value = true
+  isEarthDetached.value = false
+  earthTiledFullscreenFrameSize.value = null
+  await nextTick()
+  getEarthFrame()?.style.removeProperty('visibility')
+  suppressEarthStageTransition.value = false
+  unlockDocumentScroll()
+}
+
+function requestEarthImmersiveExit() {
+  emit('update:immersive', false)
+}
+
+watch(() => props.immersive, (immersive) => {
+  if (immersive)
+    void enterEarthImmersive()
+  else
+    void exitEarthImmersive()
+}, { flush: 'post' })
+
+onMounted(() => {
+  if (props.immersive && !isEarthDetached.value)
+    void enterEarthImmersive()
+})
+
+watch([showEarth, () => appStore.earthRenderer], ([visible, renderer], [, previousRenderer]) => {
+  if (visible && renderer === previousRenderer)
+    return
+  if (props.immersive)
+    emit('update:immersive', false)
+  forceEarthInline()
+})
+
+watch(earthMotionAllowed, (motionAllowed) => {
+  if (motionAllowed || !isEarthDetached.value)
+    return
+
+  earthTransitionSequence += 1
+  cancelEarthFrameAnimation()
+  if (!props.immersive) {
+    forceEarthInline()
+    return
+  }
+
+  suppressEarthStageTransition.value = false
+  isEarthExpanded.value = true
+  getEarthFrame()?.style.removeProperty('visibility')
+})
+
+useEventListener(window, 'resize', () => {
+  const placeholder = earthPlaceholderRef.value
+  if (!isEarthDetached.value || !placeholder)
+    return
+
+  if (isTiledEarth.value)
+    updateTiledFullscreenFrameSize(toEarthFrameRect(placeholder.getBoundingClientRect()))
+  if (!earthFrameAnimation)
+    return
+
+  earthTransitionSequence += 1
+  cancelEarthFrameAnimation()
+  if (!props.immersive) {
+    forceEarthInline()
+    return
+  }
+
+  isEarthExpanded.value = true
+  getEarthFrame()?.style.removeProperty('visibility')
+})
+
+onDeactivated(() => {
+  if (props.immersive)
+    emit('update:immersive', false)
+  forceEarthInline()
+})
+
+onBeforeUnmount(() => {
+  forceEarthInline()
+})
+
 const cardClass = 'group relative z-10 h-full bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all'
 const cardPositionClasses = [
   'col-span-4 row-span-1 col-start-1 row-start-1',
@@ -818,18 +1183,67 @@ onMounted(async () => {
 
 <template>
   <div v-if="shouldRenderHeader" :class="wrapperClass">
-    <NodeEarthGlobe
-      v-if="showEarth"
-      :nodes="globeNodes"
-      :class="earthClass"
-    />
+    <div v-if="showEarth" :class="earthClass">
+      <div
+        ref="earthPlaceholderRef"
+        class="earth-stage-placeholder"
+        :class="earthPlaceholderClass"
+      >
+        <Teleport to="body" :disabled="!isEarthDetached">
+          <div
+            ref="earthStageRef"
+            data-testid="earth-stage"
+            :data-state="earthStageState"
+            class="earth-stage"
+            :class="[
+              isTiledEarth && 'earth-stage--tiled',
+              isEarthDetached && 'earth-stage--detached',
+              isEarthExpanded && 'earth-stage--expanded',
+              (!earthMotionAllowed || suppressEarthStageTransition) && 'earth-stage--instant',
+            ]"
+            :style="earthStageStyle"
+          >
+            <div
+              ref="earthMotionFrameRef"
+              data-testid="earth-motion-frame"
+              class="earth-motion-frame"
+              :style="earthMotionFrameStyle"
+            >
+              <NodeEarthGlobe
+                :nodes="globeNodes"
+                class="earth-globe-frame"
+              />
+            </div>
+            <button
+              v-if="isEarthDetached"
+              type="button"
+              class="earth-stage-exit"
+              :disabled="!immersive"
+              aria-label="退出地球全屏"
+              title="退出地球全屏"
+              @click="requestEarthImmersiveExit"
+            >
+              <Icon icon="tabler:arrows-minimize" :width="19" :height="19" />
+            </button>
+          </div>
+        </Teleport>
+      </div>
+    </div>
 
     <div v-if="visibleCards.length > 0" :class="cardGridClass">
       <CardX
         v-for="(card, index) in visibleCards"
         :key="card.key"
         hoverable
-        :class="[cardClass, getCardPositionClass(index), card.action && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring']"
+        data-testid="summary-motion-item"
+        data-earth-exit-card="summary"
+        class="earth-summary-card-motion" :class="[
+          cardClass,
+          immersive && 'earth-summary-card-motion--away',
+          !earthMotionAllowed && 'earth-summary-card-motion--instant',
+          getCardPositionClass(index),
+          card.action && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        ]"
         content-class="h-full !p-3"
         :role="card.action ? 'button' : undefined"
         :tabindex="card.action ? 0 : undefined"
@@ -890,6 +1304,192 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.earth-stage-placeholder {
+  position: relative;
+  z-index: 0;
+}
+
+.earth-stage-placeholder--globe {
+  width: 100%;
+  max-width: 28rem;
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.earth-stage-placeholder--tiled {
+  width: 100%;
+  height: 100%;
+}
+
+.earth-stage-placeholder--realistic {
+  translate: 0 0.5rem;
+}
+
+.earth-stage-placeholder--cobe {
+  translate: 0 -1.5rem;
+}
+
+.earth-stage {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  border-radius: 1.5rem;
+  background-color: transparent;
+  isolation: isolate;
+  transition-property: border-radius;
+  transition-duration: var(--earth-immersive-duration, 600ms);
+  transition-delay: 0s;
+  transition-timing-function: var(--earth-immersive-easing, cubic-bezier(0.3, 0.7, 0.3, 1));
+}
+
+.earth-stage--detached {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  max-width: none;
+  margin: 0;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+}
+
+.earth-motion-frame {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  transform-origin: top left;
+}
+
+.earth-stage--detached .earth-motion-frame {
+  will-change: transform;
+}
+
+.earth-stage--expanded {
+  border-radius: 0;
+}
+
+.earth-stage--detached:not(.earth-stage--tiled) .earth-motion-frame {
+  width: min(86vw, 68dvh, 36rem);
+  height: min(86vw, 68dvh, 36rem);
+}
+
+.earth-stage--detached:not(.earth-stage--tiled) :deep(.earth-globe-frame) {
+  width: 100%;
+  max-width: none;
+  flex: none;
+}
+
+.earth-stage--detached.earth-stage--tiled .earth-motion-frame {
+  flex: none;
+}
+
+.earth-stage--detached.earth-stage--tiled :deep(.earth-globe-frame) {
+  max-width: none;
+}
+
+.earth-stage--instant {
+  transition-delay: 0s !important;
+  transition-duration: 0s !important;
+}
+
+.earth-stage-exit {
+  position: absolute;
+  z-index: 2;
+  top: max(1rem, env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
+  display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
+  color: var(--foreground);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px) scale(0.96);
+  backdrop-filter: blur(16px);
+  transition:
+    opacity 200ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 200ms ease;
+}
+
+.earth-stage--expanded .earth-stage-exit {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.earth-stage-exit:hover {
+  border-color: color-mix(in oklab, var(--foreground) 24%, var(--border));
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+}
+
+.earth-stage-exit:active {
+  transform: scale(0.96);
+}
+
+.earth-stage-exit:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.earth-summary-card-motion {
+  backface-visibility: hidden;
+  transform-origin: center;
+  transition-delay: var(--earth-card-return-delay, 0ms) !important;
+  transition-duration: var(--earth-card-motion-duration, 400ms) !important;
+  transition-property: opacity, transform !important;
+  transition-timing-function: var(--earth-scene-easing, cubic-bezier(0.3, 0.7, 0.3, 1)) !important;
+}
+
+.earth-summary-card-motion--away {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.earth-summary-card-motion--away[data-earth-exit-active='true'] {
+  transform: translate3d(var(--earth-card-exit-x, calc(-100vw - 100%)), var(--earth-card-exit-y, 0), 0)
+    rotate(var(--earth-card-exit-rotation, -2deg));
+  transition-delay: var(--earth-card-exit-delay, 0ms) !important;
+}
+
+:global(.home-view--earth-reversing) .earth-summary-card-motion {
+  transition-delay: 0s !important;
+}
+
+.earth-summary-card-motion--instant {
+  transition-delay: 0s !important;
+  transition-duration: 0s !important;
+}
+
+.earth-summary-card-motion--instant.earth-summary-card-motion--away {
+  transform: none;
+}
+
+@media (min-width: 768px) {
+  .earth-stage-placeholder--realistic {
+    translate: 0 -0.25rem;
+  }
+
+  .earth-stage-placeholder--cobe {
+    translate: 0 -3rem;
+  }
+}
+
 .metric-switch-enter-active,
 .metric-switch-leave-active {
   transition:
@@ -915,6 +1515,17 @@ onMounted(async () => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .earth-stage,
+  .earth-stage-exit,
+  .earth-summary-card-motion {
+    transition-delay: 0s !important;
+    transition-duration: 0s !important;
+  }
+
+  .earth-summary-card-motion--away {
+    transform: none;
+  }
+
   .metric-switch-enter-active,
   .metric-switch-leave-active {
     transition: none;

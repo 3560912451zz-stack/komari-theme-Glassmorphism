@@ -392,7 +392,7 @@ function buildNodeMetadataItems(node: NodeData): NodeMetadataItem[] {
   <div class="overflow-x-auto overflow-y-hidden min-w-0 p-1 -m-1">
     <div class="min-w-fit w-full flex flex-col gap-1">
       <!-- 表头 -->
-      <div class="grid px-2.5 py-2 bg-background/70 rounded-lg backdrop-blur-sm gap-2" :style="gridStyle">
+      <div data-node-motion-chrome class="grid px-2.5 py-2 bg-background/70 rounded-lg backdrop-blur-sm gap-2" :style="gridStyle">
         <div
           v-for="col in columns" :key="col.key"
           :class="[col.sortable ? 'cursor-pointer select-none' : '', ['status', 'os'].includes(col.key) ? 'text-center' : 'text-left']"
@@ -409,6 +409,8 @@ function buildNodeMetadataItems(node: NodeData): NodeMetadataItem[] {
           <div
             v-for="({ data: node, index }) in renderedRows"
             :key="getRowTransitionKey(node)"
+            data-testid="node-motion-item"
+            data-node-motion-item
             class="flex flex-col relative h-16 min-h-16 max-h-16 overflow-hidden justify-center px-2.5 cursor-pointer bg-background/40 rounded-lg backdrop-blur-sm shadow-[0_0_0_2px] shadow-transparent hover:shadow-slate-500/10 hover:bg-background/70 transition-all"
             :class="[!node.online && '!shadow-red-600/10']"
             :style="getRowTransitionStyle(index)"

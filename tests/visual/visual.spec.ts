@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { installKomariFixture } from './fixtures/komari'
 
@@ -19,6 +19,278 @@ async function openStablePage(page: Page, path = '/'): Promise<void> {
   await page.addStyleTag({ content: STABLE_STYLE })
   await page.waitForTimeout(700)
   await expect(page.locator('html')).toHaveJSProperty('scrollWidth', await page.locator('html').evaluate(element => element.clientWidth))
+}
+
+async function openInteractiveHome(page: Page): Promise<Locator> {
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: /Komari (?:Visual Lab|Motion Preview)/ })).toBeVisible()
+
+  const earthStage = page.getByTestId('earth-stage')
+  await expect(earthStage).toBeVisible()
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expect.poll(() => page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-earth-motion-state]')
+    if (!root)
+      return false
+
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(
+      '[data-testid="node-motion-item"], [data-testid="summary-motion-item"]',
+    ))
+    const targets = new Set<HTMLElement>([root])
+    elements.forEach((element) => {
+      targets.add(element)
+      if (element.parentElement)
+        targets.add(element.parentElement)
+    })
+
+    return Array.from(targets).every(element => element.getAnimations().every((animation) => {
+      const effect = animation.effect as KeyframeEffect | null
+      return effect?.target !== element || !['pending', 'running'].includes(animation.playState)
+    }))
+  })).toBe(true)
+  return earthStage
+}
+
+async function clearPageFocus(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur()
+  })
+  await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true)
+}
+
+async function expectPageScrollLocked(page: Page, locked: boolean): Promise<void> {
+  await expect.poll(() => page.evaluate(() => ({
+    body: getComputedStyle(document.body).overflow === 'hidden',
+    html: getComputedStyle(document.documentElement).overflow === 'hidden',
+  }))).toEqual({ body: locked, html: locked })
+}
+
+async function expectEarthFillsViewport(page: Page, earthStage: Locator): Promise<void> {
+  const viewport = page.viewportSize()
+  expect(viewport).not.toBeNull()
+
+  await expect.poll(async () => {
+    const box = await earthStage.boundingBox()
+    if (!box || !viewport)
+      return false
+
+    return Math.abs(box.x) <= 2
+      && Math.abs(box.y) <= 2
+      && Math.abs(box.width - viewport.width) <= 2
+      && Math.abs(box.height - viewport.height) <= 2
+  }).toBe(true)
+}
+
+async function expectEarthStageTransparent(earthStage: Locator): Promise<void> {
+  await expect.poll(() => earthStage.evaluate((element) => {
+    const backgroundColor = getComputedStyle(element).backgroundColor.replaceAll(' ', '')
+    return backgroundColor === 'transparent' || backgroundColor === 'rgba(0,0,0,0)'
+  })).toBe(true)
+}
+
+async function expectEarthReturnsToRect(earthStage: Locator, expected: NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>): Promise<void> {
+  await expect.poll(async () => {
+    const box = await earthStage.boundingBox()
+    if (!box)
+      return false
+
+    return Math.abs(box.x - expected.x) <= 2
+      && Math.abs(box.y - expected.y) <= 2
+      && Math.abs(box.width - expected.width) <= 2
+      && Math.abs(box.height - expected.height) <= 2
+  }).toBe(true)
+}
+
+async function getEarthStageTransitionDuration(earthStage: Locator): Promise<number> {
+  return earthStage.evaluate((element) => {
+    const toMilliseconds = (value: string): number => {
+      const duration = Number.parseFloat(value)
+      return value.trim().endsWith('ms') ? duration : duration * 1000
+    }
+    return Math.max(...getComputedStyle(element).transitionDuration.split(',').map(toMilliseconds))
+  })
+}
+
+async function hasRunningEarthFrameMotion(earthFrame: Locator): Promise<boolean> {
+  return earthFrame.evaluate(element => element.getAnimations().some((animation) => {
+    const effect = animation.effect as KeyframeEffect | null
+    const timing = effect?.getTiming()
+    return effect?.target === element
+      && animation.playState === 'running'
+      && timing?.iterations === 1
+      && typeof timing.duration === 'number'
+      && timing.duration > 0
+  }))
+}
+
+async function sampleEarthFrameLayout(earthFrame: Locator): Promise<Array<{ height: number, width: number }>> {
+  return earthFrame.evaluate(async (element) => {
+    const samples: Array<{ height: number, width: number }> = []
+    for (let index = 0; index < 4; index += 1) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+      samples.push({
+        height: (element as HTMLElement).offsetHeight,
+        width: (element as HTMLElement).offsetWidth,
+      })
+    }
+    return samples
+  })
+}
+
+interface NodeMotionItemRect {
+  domIndex: number
+  height: number
+  left: number
+  top: number
+  width: number
+}
+
+interface ActiveNodeMotionItem extends NodeMotionItemRect {
+  delay: number
+  opacity: number
+  order: number
+}
+
+const NODE_MOTION_ITEM_SELECTOR = '[data-node-motion-item]'
+
+async function getVisibleNodeMotionItems(page: Page): Promise<NodeMotionItemRect[]> {
+  return page.evaluate((selector) => {
+    return Array.from(document.querySelectorAll<HTMLElement>(selector)).flatMap((element, domIndex) => {
+      const rect = element.getBoundingClientRect()
+      const intersectsViewport = rect.width > 0
+        && rect.height > 0
+        && rect.bottom > 0
+        && rect.top < window.innerHeight
+        && rect.right > 0
+        && rect.left < window.innerWidth
+
+      return intersectsViewport
+        ? [{ domIndex, height: rect.height, left: rect.left, top: rect.top, width: rect.width }]
+        : []
+    })
+  }, NODE_MOTION_ITEM_SELECTOR)
+}
+
+async function getActiveNodeMotionItems(page: Page): Promise<ActiveNodeMotionItem[]> {
+  return page.evaluate((selector) => {
+    return Array.from(document.querySelectorAll<HTMLElement>(selector)).flatMap((element, domIndex) => {
+      if (element.dataset.earthExitActive !== 'true')
+        return []
+
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return [{
+        delay: Number.parseFloat(style.getPropertyValue('--earth-card-exit-delay')) || 0,
+        domIndex,
+        height: rect.height,
+        left: rect.left,
+        opacity: Number.parseFloat(style.opacity),
+        order: Number(element.dataset.earthExitOrder ?? 0),
+        top: rect.top,
+        width: rect.width,
+      }]
+    })
+  }, NODE_MOTION_ITEM_SELECTOR)
+}
+
+async function expectEarthCenteredAtCompactSize(page: Page, earthFrame: Locator): Promise<void> {
+  await expect.poll(() => earthFrame.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+    const expectedSize = Math.min(window.innerWidth * 0.86, window.innerHeight * 0.68, rootFontSize * 36)
+
+    return Math.abs(rect.left + rect.width / 2 - window.innerWidth / 2) <= 2
+      && Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2) <= 2
+      && Math.abs(rect.width - expectedSize) <= 2
+      && Math.abs(rect.height - expectedSize) <= 2
+      && Math.abs(rect.width - rect.height) <= 2
+  })).toBe(true)
+}
+
+async function expectNodeMotionItemsOffscreen(page: Page, expectedItems: ActiveNodeMotionItem[]): Promise<void> {
+  const domIndexes = expectedItems.map(item => item.domIndex)
+  await expect.poll(() => page.evaluate(({ domIndexes, selector }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector))
+    return domIndexes.every((domIndex) => {
+      const element = elements[domIndex]
+      if (!element)
+        return false
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return Number.parseFloat(style.opacity) <= 0.01
+        && style.pointerEvents === 'none'
+        && (rect.right <= 1 || rect.left >= window.innerWidth - 1)
+    })
+  }, { domIndexes, selector: NODE_MOTION_ITEM_SELECTOR })).toBe(true)
+}
+
+async function expectNodeMotionItemsRestored(page: Page, expectedItems: NodeMotionItemRect[]): Promise<void> {
+  await expect.poll(() => page.evaluate(({ expectedItems, selector }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector))
+    return expectedItems.every((expected) => {
+      const element = elements[expected.domIndex]
+      if (!element)
+        return false
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return !element.hasAttribute('data-earth-exit-active')
+        && Number.parseFloat(style.opacity) >= 0.99
+        && style.pointerEvents !== 'none'
+        && Math.abs(rect.left - expected.left) <= 2
+        && Math.abs(rect.top - expected.top) <= 2
+        && Math.abs(rect.width - expected.width) <= 2
+        && Math.abs(rect.height - expected.height) <= 2
+    })
+  }, { expectedItems, selector: NODE_MOTION_ITEM_SELECTOR })).toBe(true)
+}
+
+async function getMaximumNodeHorizontalDelta(page: Page, expectedItems: NodeMotionItemRect[]): Promise<number> {
+  return page.evaluate(({ expectedItems, selector }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector))
+    return expectedItems.reduce((maximum, expected) => {
+      const element = elements[expected.domIndex]
+      if (!element)
+        return maximum
+      return Math.max(maximum, Math.abs(element.getBoundingClientRect().left - expected.left))
+    }, 0)
+  }, { expectedItems, selector: NODE_MOTION_ITEM_SELECTOR })
+}
+
+async function activeNodeMotionHasZeroTransitionDelay(page: Page): Promise<boolean> {
+  return page.evaluate((selector) => {
+    const toMilliseconds = (value: string): number => {
+      const duration = Number.parseFloat(value)
+      return value.trim().endsWith('ms') ? duration : duration * 1000
+    }
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(
+      `${selector}[data-earth-exit-active="true"]`,
+    ))
+    return elements.length > 0 && elements.every((element) => {
+      const delays = getComputedStyle(element).transitionDelay.split(',').map(toMilliseconds)
+      return delays.every(delay => Math.abs(delay) <= 0.1)
+    })
+  }, NODE_MOTION_ITEM_SELECTOR)
+}
+
+async function hasDirectRunningOrPendingAnimation(element: Locator): Promise<boolean> {
+  return element.evaluate(target => target.getAnimations().some((animation) => {
+    const effect = animation.effect as KeyframeEffect | null
+    return effect?.target === target && ['pending', 'running'].includes(animation.playState)
+  }))
+}
+
+async function nodeMotionItemsHaveDirectRunningOrPendingAnimation(page: Page, domIndexes: number[]): Promise<boolean> {
+  return page.evaluate(({ domIndexes, selector }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector))
+    return domIndexes.some((domIndex) => {
+      const element = elements[domIndex]
+      return element?.getAnimations().some((animation) => {
+        const effect = animation.effect as KeyframeEffect | null
+        return effect?.target === element && ['pending', 'running'].includes(animation.playState)
+      }) ?? false
+    })
+  }, { domIndexes, selector: NODE_MOTION_ITEM_SELECTOR })
 }
 
 async function expectNodeMetricIcons(page: Page): Promise<void> {
@@ -73,6 +345,331 @@ test('home tiled layout desktop', async ({ page }) => {
   await openStablePage(page)
   await expectNodeMetricIcons(page)
   await expect(page).toHaveScreenshot('home-tiled-desktop.png', { fullPage: false })
+})
+
+test('plain Tab toggles immersive earth and Escape exits', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const inlineRect = await earthStage.boundingBox()
+  if (!inlineRect)
+    throw new Error('Earth stage has no inline layout box')
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expectPageScrollLocked(page, true)
+  await expectEarthFillsViewport(page, earthStage)
+
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expectPageScrollLocked(page, false)
+  await expectEarthReturnsToRect(earthStage, inlineRect)
+
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expectPageScrollLocked(page, true)
+  await page.keyboard.press('Escape')
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expectPageScrollLocked(page, false)
+  await expectEarthReturnsToRect(earthStage, inlineRect)
+})
+
+test('immersive earth centers compactly while visible node cards exit in order and return', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+  const homeView = page.locator('[data-earth-motion-state]')
+  const motionChrome = page.locator('[data-earth-toolbar-segment]')
+  const filterChrome = page.getByTestId('earth-toolbar-filters')
+  const actionChrome = page.getByTestId('earth-toolbar-actions')
+  const inlineEarthRect = await earthStage.boundingBox()
+  if (!inlineEarthRect)
+    throw new Error('Earth stage has no inline layout box')
+
+  const visibleNodeItems = await getVisibleNodeMotionItems(page)
+  expect(visibleNodeItems.length).toBeGreaterThan(1)
+  await expect(motionChrome).toHaveCount(2)
+  const inlineChromeRects = await motionChrome.evaluateAll(elements => elements.map((element) => {
+    const rect = element.getBoundingClientRect()
+    return { height: rect.height, left: rect.left, top: rect.top, width: rect.width }
+  }))
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'entering')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  expect(await getEarthStageTransitionDuration(earthStage)).toBe(600)
+  await expect.poll(() => earthMotionFrame.evaluate((element) => {
+    const animation = element.getAnimations().find((candidate) => {
+      const effect = candidate.effect as KeyframeEffect | null
+      return effect?.target === element && candidate.playState === 'running'
+    })
+    const duration = animation?.effect?.getTiming().duration
+    return typeof duration === 'number' ? duration : 0
+  })).toBe(600)
+  const immersiveTransitionDurations = await page.evaluate(() => ({
+    node: getComputedStyle(document.querySelector<HTMLElement>('[data-node-motion-item]')!).transitionDuration,
+    summary: getComputedStyle(document.querySelector<HTMLElement>('[data-testid="summary-motion-item"]')!).transitionDuration,
+    toolbar: getComputedStyle(document.querySelector<HTMLElement>('[data-earth-toolbar-segment]')!).transitionDuration,
+  }))
+  expect(immersiveTransitionDurations).toEqual({
+    node: '0.4s, 0.4s',
+    summary: '0.4s',
+    toolbar: '0.4s, 0.4s',
+  })
+  const chromeExitDelays = await motionChrome.evaluateAll(elements => elements.map((element) => {
+    const delay = getComputedStyle(element).transitionDelay.split(',')[0] ?? '0s'
+    return Number.parseFloat(delay) * (delay.endsWith('ms') ? 1 : 1000)
+  }))
+  expect(chromeExitDelays).toEqual([0, 25])
+  const transitionLayers = await page.evaluate(() => {
+    const home = document.querySelector<HTMLElement>('[data-earth-motion-state]')
+    const stage = document.querySelector<HTMLElement>('[data-testid="earth-stage"]')
+    return {
+      home: Number.parseFloat(home ? getComputedStyle(home).zIndex : '0') || 0,
+      stage: Number.parseFloat(stage ? getComputedStyle(stage).zIndex : '0') || 0,
+    }
+  })
+  expect(transitionLayers.home).toBeGreaterThan(transitionLayers.stage)
+  await expect.poll(
+    () => motionChrome.evaluateAll((elements, expectedRects) => elements.every((element, index) => {
+      const expected = expectedRects[index]
+      return Boolean(expected && Math.abs(element.getBoundingClientRect().left - expected.left) > 4)
+    }), inlineChromeRects),
+    { intervals: [25, 50, 75], timeout: 300 },
+  ).toBe(true)
+
+  await expect.poll(() => getActiveNodeMotionItems(page).then(items => items.length)).toBeGreaterThanOrEqual(visibleNodeItems.length)
+  const activeNodeItems = await getActiveNodeMotionItems(page)
+  const activeDomIndexes = new Set(activeNodeItems.map(item => item.domIndex))
+  expect(visibleNodeItems.every(item => activeDomIndexes.has(item.domIndex))).toBe(true)
+
+  const itemsInDomOrder = [...activeNodeItems].sort((left, right) => left.domIndex - right.domIndex)
+  const exitOrders = itemsInDomOrder.map(item => item.order)
+  const exitDelays = itemsInDomOrder.map(item => item.delay)
+  expect(exitOrders).toEqual([...exitOrders].sort((left, right) => left - right))
+  expect(exitDelays).toEqual([...exitDelays].sort((left, right) => left - right))
+  expect(new Set(exitDelays).size).toBeGreaterThan(1)
+  expect(Math.max(...exitDelays)).toBeLessThanOrEqual(200)
+
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'immersive')
+  await expectEarthFillsViewport(page, earthStage)
+  await expectEarthStageTransparent(earthStage)
+  await expectEarthCenteredAtCompactSize(page, earthMotionFrame)
+  await expectNodeMotionItemsOffscreen(page, activeNodeItems)
+  expect(await filterChrome.evaluate(element => element.getBoundingClientRect().right <= 1)).toBe(true)
+  expect(await actionChrome.evaluate(element => element.getBoundingClientRect().left >= window.innerWidth - 1)).toBe(true)
+  expect(await motionChrome.evaluateAll(elements => elements.every(element => (
+    Number.parseFloat(getComputedStyle(element).opacity) <= 0.01
+  )))).toBe(true)
+  await expectPageScrollLocked(page, true)
+
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'returning')
+  const chromeReturnDelays = await motionChrome.evaluateAll(elements => elements.map((element) => {
+    const delay = getComputedStyle(element).transitionDelay.split(',')[0] ?? '0s'
+    return Number.parseFloat(delay) * (delay.endsWith('ms') ? 1 : 1000)
+  }))
+  expect(chromeReturnDelays).toEqual([15, 0])
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'inline')
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expectPageScrollLocked(page, false)
+  await expectEarthReturnsToRect(earthStage, inlineEarthRect)
+  await expectNodeMotionItemsRestored(page, visibleNodeItems)
+  await expect.poll(() => motionChrome.evaluateAll((elements, expectedRects) => {
+    return elements.every((element, index) => {
+      const expected = expectedRects[index]
+      if (!expected)
+        return false
+      const rect = element.getBoundingClientRect()
+      return Number.parseFloat(getComputedStyle(element).opacity) >= 0.99
+        && Math.abs(rect.left - expected.left) <= 2
+        && Math.abs(rect.top - expected.top) <= 2
+        && Math.abs(rect.width - expected.width) <= 2
+        && Math.abs(rect.height - expected.height) <= 2
+    })
+  }, inlineChromeRects)).toBe(true)
+})
+
+test('Tab keeps native focus navigation in the node search input', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const searchInput = page.getByRole('textbox', { name: '搜索节点' })
+
+  await searchInput.focus()
+  await expect(searchInput).toBeFocused()
+  await page.keyboard.press('Tab')
+
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expect(searchInput).not.toBeFocused()
+  await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true)
+  await expectPageScrollLocked(page, false)
+})
+
+test('immersive earth uses a stable FLIP motion frame', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const animatedEarthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+  await expect(earthMotionFrame).toBeVisible()
+  const inlineLayout = await earthMotionFrame.evaluate(element => ({
+    height: (element as HTMLElement).offsetHeight,
+    width: (element as HTMLElement).offsetWidth,
+  }))
+
+  expect(await getEarthStageTransitionDuration(animatedEarthStage)).toBeGreaterThan(0)
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(animatedEarthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(true)
+
+  const layoutSamples = await sampleEarthFrameLayout(earthMotionFrame)
+  expect(layoutSamples[0].width).toBeGreaterThan(inlineLayout.width)
+  expect(layoutSamples.every(sample => (
+    sample.width === layoutSamples[0].width
+    && sample.height === layoutSamples[0].height
+  ))).toBe(true)
+})
+
+test('tiled immersive earth keeps its inline aspect ratio', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false, earthRenderer: 'tiled' })
+  const earthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+  const inlineLayout = await earthMotionFrame.evaluate(element => ({
+    height: (element as HTMLElement).offsetHeight,
+    width: (element as HTMLElement).offsetWidth,
+  }))
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  const fullscreenLayout = await earthMotionFrame.evaluate(element => ({
+    height: (element as HTMLElement).offsetHeight,
+    width: (element as HTMLElement).offsetWidth,
+  }))
+
+  expect(Math.abs(
+    inlineLayout.width / inlineLayout.height
+    - fullscreenLayout.width / fullscreenLayout.height,
+  )).toBeLessThan(0.01)
+})
+
+test('immersive earth reverses an entry after node cards start moving', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+  const homeView = page.locator('[data-earth-motion-state]')
+  const inlineEarthRect = await earthStage.boundingBox()
+  if (!inlineEarthRect)
+    throw new Error('Earth stage has no inline layout box')
+
+  const visibleNodeItems = await getVisibleNodeMotionItems(page)
+  expect(visibleNodeItems.length).toBeGreaterThan(1)
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'entering')
+  await expect.poll(
+    () => getMaximumNodeHorizontalDelta(page, visibleNodeItems),
+    { intervals: [25, 50, 75], timeout: 900 },
+  ).toBeGreaterThan(4)
+
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'returning')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'inline')
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+  await expectPageScrollLocked(page, false)
+  await expectEarthReturnsToRect(earthStage, inlineEarthRect)
+  await expectNodeMotionItemsRestored(page, visibleNodeItems)
+})
+
+test('immersive earth reverses an exit in place', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+  const homeView = page.locator('[data-earth-motion-state]')
+  const visibleNodeItems = await getVisibleNodeMotionItems(page)
+  expect(visibleNodeItems.length).toBeGreaterThan(1)
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'entering')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expect.poll(() => getActiveNodeMotionItems(page).then(items => items.length)).toBeGreaterThanOrEqual(visibleNodeItems.length)
+  const activeNodeItems = await getActiveNodeMotionItems(page)
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(true)
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'returning')
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(true)
+  await page.keyboard.press('Tab')
+
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'entering')
+  await expect.poll(() => activeNodeMotionHasZeroTransitionDelay(page)).toBe(true)
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'immersive')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+  await expectPageScrollLocked(page, true)
+  await expectEarthFillsViewport(page, earthStage)
+  await expectEarthCenteredAtCompactSize(page, earthMotionFrame)
+  await expectNodeMotionItemsOffscreen(page, activeNodeItems)
+})
+
+test('immersive earth switches instantly when reduced motion is preferred', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+  const filterChrome = page.getByTestId('earth-toolbar-filters')
+  const actionChrome = page.getByTestId('earth-toolbar-actions')
+  const homeView = page.locator('[data-earth-motion-state]')
+  const visibleNodeItems = await getVisibleNodeMotionItems(page)
+  expect(visibleNodeItems.length).toBeGreaterThan(1)
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'immersive')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expectPageScrollLocked(page, true)
+
+  await expect.poll(() => getActiveNodeMotionItems(page).then(items => items.length)).toBeGreaterThanOrEqual(visibleNodeItems.length)
+  const activeNodeItems = await getActiveNodeMotionItems(page)
+  const activeDomIndexes = activeNodeItems.map(item => item.domIndex)
+  expect(await hasDirectRunningOrPendingAnimation(earthMotionFrame)).toBe(false)
+  expect(await hasDirectRunningOrPendingAnimation(filterChrome)).toBe(false)
+  expect(await hasDirectRunningOrPendingAnimation(actionChrome)).toBe(false)
+  expect(await nodeMotionItemsHaveDirectRunningOrPendingAnimation(page, activeDomIndexes)).toBe(false)
+
+  await page.keyboard.press('Tab')
+  await expect(homeView).toHaveAttribute('data-earth-motion-state', 'inline')
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+  await expectPageScrollLocked(page, false)
+  expect(await hasDirectRunningOrPendingAnimation(earthMotionFrame)).toBe(false)
+  expect(await hasDirectRunningOrPendingAnimation(filterChrome)).toBe(false)
+  expect(await hasDirectRunningOrPendingAnimation(actionChrome)).toBe(false)
+  expect(await nodeMotionItemsHaveDirectRunningOrPendingAnimation(page, activeDomIndexes)).toBe(false)
+})
+
+test('immersive earth has no motion when page animation is disabled', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: true })
+  const earthStage = await openInteractiveHome(page)
+
+  expect(await getEarthStageTransitionDuration(earthStage)).toBe(0)
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  expect(await hasRunningEarthFrameMotion(page.getByTestId('earth-motion-frame'))).toBe(false)
+  await expectEarthFillsViewport(page, earthStage)
 })
 
 test('home mini card metric icons remain accessible', async ({ page }) => {

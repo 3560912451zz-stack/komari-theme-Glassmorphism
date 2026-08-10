@@ -80,6 +80,18 @@ class InitManager {
     }
 
     try {
+      if (import.meta.env.DEV && import.meta.env.VITE_MOCK_NODES === 'true') {
+        const { mockClients, mockPublicSettings, mockStatuses } = await import('@/dev/mockNodes')
+        this.appStore.publicSettings = mockPublicSettings
+        this.appStore.updateLoginState(false)
+        this.appStore.nodeSelectedGroup = 'all'
+        this.appStore.nodeViewMode = 'card'
+        this.nodesStore.initNodes(mockClients, mockStatuses)
+        this.appStore.connectionError = false
+        this.isInitialized = true
+        return
+      }
+
       await this.runStartupRequests()
 
       if (this.destroyed || this.redirectingToAdmin)
