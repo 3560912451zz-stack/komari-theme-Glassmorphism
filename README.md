@@ -6,14 +6,14 @@
 
 从好看的监控首页，逐步成长为好用、可配置、适合长期运行的 Komari 主题。
 
-![Version](https://img.shields.io/github/v/release/sanrokamlan-prog/komari-theme-Glassmorphism?style=for-the-badge&label=release&color=10b981)
+![Version](https://img.shields.io/github/v/release/3560912451zz-stack/komari-theme-Glassmorphism?style=for-the-badge&label=release&color=10b981)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?style=for-the-badge&logo=vue.js)
 ![Vite](https://img.shields.io/badge/Vite-7-646cff?style=for-the-badge&logo=vite)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-v4-38bdf8?style=for-the-badge&logo=tailwindcss)
 ![Bun](https://img.shields.io/badge/Bun-%3E%3D1.2-000000?style=for-the-badge&logo=bun)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 
-**[📥 下载 Release](https://github.com/sanrokamlan-prog/komari-theme-Glassmorphism/releases)** ·
+**[📥 下载 Release](https://github.com/3560912451zz-stack/komari-theme-Glassmorphism/releases)** ·
 **[🚀 安装](#-安装--升级)** ·
 **[✨ 功能](#-节点详情页全面升级)** ·
 **[⚙️ 设置](#️-主题设置)** ·
@@ -37,14 +37,33 @@
 
 | 项目     | 说明                                                      |
 | :------- | :-------------------------------------------------------- |
-| 当前版本 | **v3.3.3**                                                |
+| 当前版本 | **v3.3.5**                                                |
 | 主题定位 | Komari Monitor 可导入 zip 主题，不是普通 Web App 部署包   |
 | 视觉风格 | 毛玻璃卡片、动态背景、浅色 / 深色 / 北京时间自动日夜模式  |
 | 数据能力 | Metric Store 优先，旧接口自动 fallback，兼容 Komari 1.2.x |
 | 高级工具 | 拓扑、性价比、健康摘要、快照导出、访客安全审计            |
 | 发布产物 | `komari-theme-Glassmorphism-build-<short-sha>.zip`        |
+| 维护分支 | [个人 fork](https://github.com/3560912451zz-stack/komari-theme-Glassmorphism)（原主题作者署名保留在 manifest） |
 
 > 好看只是外壳。v3 真正的重点，是把 Metric、Ping、流量、费用、健康分析和运维工具整合成日常真的会打开来看的监控面板。
+
+---
+
+## 🧭 v3.3.5 总览卡片动画同步
+
+- 统一六张总览统计卡片的进入、退出和返回时间线，按 `Tab` 切换时同时移动
+- 保留节点卡片的有序错峰效果，让节点仍按屏幕顺序离场和回位
+- 增加统计卡片移出视口、恢复原位和节点回位错峰的视觉回归覆盖
+
+## 🌍 v3.3.4 Tab 地球沉浸切换
+
+- 在首页非输入控件上按 `Tab`，地球平滑移动到视口中央；再次按 `Tab` 或按 `Escape` 恢复原布局
+- 节点卡片按屏幕上的实际顺序分组，从左右两侧有序滑出；总览卡片也参与同一场景切换
+- 地球保持紧凑尺寸并使用透明全屏舞台，不遮盖原有背景；恢复时保留原位置和尺寸
+- 分组 / 快捷筛选与搜索 / 视图操作分成左右两个工具栏段同步离场
+- 支持 `disablePageAnimation` 和 `prefers-reduced-motion`，减少动画时会直接切换状态
+
+地球标记只从当前可见节点生成。节点的 IP 地理解析用于城市坐标，并可能优先于 `region` 字段；解析结果会在浏览器本地缓存 30 天，因此 IP 数据库误判时可能出现与节点标注不一致的国旗。
 
 ---
 
@@ -308,6 +327,7 @@ common:getRecords / legacy records fallback
 ## 🪟 首页驾驶舱
 
 - 地球、点阵地球、平铺地图三种视觉模式
+- 按 `Tab` 在紧凑居中地球与普通首页之间切换，节点卡片和工具栏按顺序离场
 - 卡片 / 列表双视图，列表在密集节点下自动虚拟化
 - `mini` / `compact` / `comfortable` / `large` 四档卡片密度，默认保持 `compact`
 - 官方、基础、运维、资源、财务、流量、GPU、资产、完整和自定义总览方案
@@ -418,12 +438,12 @@ API / RPC
 Komari 后台支持直接填写仓库地址并拉取最新 Release：
 
 ```text
-https://github.com/sanrokamlan-prog/komari-theme-Glassmorphism
+https://github.com/3560912451zz-stack/komari-theme-Glassmorphism
 ```
 
 ### 方式二：手动安装 Release
 
-1. 打开 [Releases](https://github.com/sanrokamlan-prog/komari-theme-Glassmorphism/releases)
+1. 打开 [Releases](https://github.com/3560912451zz-stack/komari-theme-Glassmorphism/releases)
 2. 下载最新的 `komari-theme-Glassmorphism-build-*.zip`
 3. 登录 Komari Monitor 后台，进入 **设置 → 主题管理**
 4. 上传 zip 并启用主题
@@ -445,6 +465,14 @@ bun run build
 bun run test:visual
 bun run preview
 ```
+
+要在本地查看假节点和 `Tab` 地球动画，创建或编辑被 Git 忽略的 `.env.development.local`：
+
+```dotenv
+VITE_MOCK_NODES=true
+```
+
+然后运行 `bun run dev`，打开终端输出的本地地址。假节点只在开发环境加载，不会进入生产构建或 Release 压缩包。
 
 更新确认过的视觉基准图：
 
@@ -472,6 +500,25 @@ dist/
 ---
 
 ## 📝 更新日志
+
+<details open>
+<summary><strong>v3.3.5 · 总览卡片动画同步</strong></summary>
+
+- 六张总览统计卡片进入、退出和返回统一使用零延迟，避免上下区域不同步
+- 节点卡片继续保留按视觉顺序的错峰离场与回位
+- 增加统计卡片移出视口、恢复原位和节点回位错峰的视觉回归覆盖
+
+</details>
+
+<details>
+<summary><strong>v3.3.4 · Tab 地球沉浸切换</strong></summary>
+
+- 首页按 `Tab` 进入紧凑居中的地球视图，再按 `Tab` 或 `Escape` 恢复
+- 节点卡片、总览卡片和左右两段工具栏按顺序滑出视口，地球与卡片动画使用统一时间线
+- 全屏舞台透明，地球尺寸受视口约束，不再放大到覆盖整页
+- 支持禁用动画和 `prefers-reduced-motion`，并增加本地假节点预览 fixture
+
+</details>
 
 <details open>
 <summary><strong>v3.3.3 · 免费节点文案修复</strong></summary>
@@ -627,7 +674,7 @@ dist/
 
 </details>
 
-更多历史版本请查看 [Releases](https://github.com/sanrokamlan-prog/komari-theme-Glassmorphism/releases)。
+更多历史版本请查看 [Releases](https://github.com/3560912451zz-stack/komari-theme-Glassmorphism/releases)。
 
 ---
 
