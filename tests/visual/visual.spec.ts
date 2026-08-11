@@ -112,6 +112,13 @@ async function getEarthStageTransitionDuration(earthStage: Locator): Promise<num
   })
 }
 
+async function getTransitionDelaysMs(locator: Locator): Promise<number[]> {
+  return locator.evaluateAll(elements => elements.map((element) => {
+    const delay = getComputedStyle(element).transitionDelay.split(',')[0] ?? '0s'
+    return Number.parseFloat(delay) * (delay.endsWith('ms') ? 1 : 1000)
+  }))
+}
+
 async function hasRunningEarthFrameMotion(earthFrame: Locator): Promise<boolean> {
   return earthFrame.evaluate(element => element.getAnimations().some((animation) => {
     const effect = animation.effect as KeyframeEffect | null
@@ -382,6 +389,7 @@ test('immersive earth centers compactly while visible node cards exit in order a
   const earthMotionFrame = page.getByTestId('earth-motion-frame')
   const homeView = page.locator('[data-earth-motion-state]')
   const motionChrome = page.locator('[data-earth-toolbar-segment]')
+  const summaryMotionItems = page.getByTestId('summary-motion-item')
   const filterChrome = page.getByTestId('earth-toolbar-filters')
   const actionChrome = page.getByTestId('earth-toolbar-actions')
   const inlineEarthRect = await earthStage.boundingBox()
@@ -391,6 +399,11 @@ test('immersive earth centers compactly while visible node cards exit in order a
   const visibleNodeItems = await getVisibleNodeMotionItems(page)
   expect(visibleNodeItems.length).toBeGreaterThan(1)
   await expect(motionChrome).toHaveCount(2)
+  await expect(summaryMotionItems).toHaveCount(6)
+  const inlineSummaryRects = await summaryMotionItems.evaluateAll(elements => elements.map((element) => {
+    const rect = element.getBoundingClientRect()
+    return { height: rect.height, left: rect.left, top: rect.top, width: rect.width }
+  }))
   const inlineChromeRects = await motionChrome.evaluateAll(elements => elements.map((element) => {
     const rect = element.getBoundingClientRect()
     return { height: rect.height, left: rect.left, top: rect.top, width: rect.width }
@@ -419,10 +432,12 @@ test('immersive earth centers compactly while visible node cards exit in order a
     summary: '0.4s',
     toolbar: '0.4s, 0.4s',
   })
-  const chromeExitDelays = await motionChrome.evaluateAll(elements => elements.map((element) => {
-    const delay = getComputedStyle(element).transitionDelay.split(',')[0] ?? '0s'
-    return Number.parseFloat(delay) * (delay.endsWith('ms') ? 1 : 1000)
-  }))
+  const summaryExitDelays = await getTransitionDelaysMs(summaryMotionItems)
+  expect(summaryExitDelays).toEqual([0, 0, 0, 0, 0, 0])
+  await expect.poll(() => summaryMotionItems.evaluateAll(elements => (
+    elements.every(element => element.getAttribute('data-earth-exit-active') === 'true')
+  ))).toBe(true)
+  const chromeExitDelays = await getTransitionDelaysMs(motionChrome)
   expect(chromeExitDelays).toEqual([0, 25])
   const transitionLayers = await page.evaluate(() => {
     const home = document.querySelector<HTMLElement>('[data-earth-motion-state]')
@@ -459,6 +474,11 @@ test('immersive earth centers compactly while visible node cards exit in order a
   await expectEarthStageTransparent(earthStage)
   await expectEarthCenteredAtCompactSize(page, earthMotionFrame)
   await expectNodeMotionItemsOffscreen(page, activeNodeItems)
+  await expect.poll(() => summaryMotionItems.evaluateAll(elements => elements.every((element) => {
+    const rect = element.getBoundingClientRect()
+    return Number.parseFloat(getComputedStyle(element).opacity) <= 0.01
+      && (rect.right <= 1 || rect.left >= window.innerWidth - 1)
+  }))).toBe(true)
   expect(await filterChrome.evaluate(element => element.getBoundingClientRect().right <= 1)).toBe(true)
   expect(await actionChrome.evaluate(element => element.getBoundingClientRect().left >= window.innerWidth - 1)).toBe(true)
   expect(await motionChrome.evaluateAll(elements => elements.every(element => (
@@ -468,16 +488,37 @@ test('immersive earth centers compactly while visible node cards exit in order a
 
   await page.keyboard.press('Tab')
   await expect(homeView).toHaveAttribute('data-earth-motion-state', 'returning')
-  const chromeReturnDelays = await motionChrome.evaluateAll(elements => elements.map((element) => {
-    const delay = getComputedStyle(element).transitionDelay.split(',')[0] ?? '0s'
-    return Number.parseFloat(delay) * (delay.endsWith('ms') ? 1 : 1000)
-  }))
+  const chromeReturnDelays = await getTransitionDelaysMs(motionChrome)
   expect(chromeReturnDelays).toEqual([15, 0])
+  const summaryReturnDelays = await getTransitionDelaysMs(summaryMotionItems)
+  expect(summaryReturnDelays).toEqual([0, 0, 0, 0, 0, 0])
+  const nodeReturnDelays = await page.evaluate(({ domIndexes, selector }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector))
+    return domIndexes.map((domIndex) => {
+      const element = elements[domIndex]
+      return Number.parseFloat(element?.style.getPropertyValue('--earth-card-return-delay') ?? '') || 0
+    })
+  }, { domIndexes: activeNodeItems.map(item => item.domIndex), selector: NODE_MOTION_ITEM_SELECTOR })
+  expect(new Set(nodeReturnDelays).size).toBeGreaterThan(1)
+  expect(nodeReturnDelays).toEqual([...nodeReturnDelays].sort((left, right) => right - left))
   await expect(homeView).toHaveAttribute('data-earth-motion-state', 'inline')
   await expect(earthStage).toHaveAttribute('data-state', 'inline')
   await expectPageScrollLocked(page, false)
   await expectEarthReturnsToRect(earthStage, inlineEarthRect)
   await expectNodeMotionItemsRestored(page, visibleNodeItems)
+  await expect.poll(() => summaryMotionItems.evaluateAll((elements, expectedRects) => (
+    elements.every((element, index) => {
+      const expected = expectedRects[index]
+      if (!expected)
+        return false
+      const rect = element.getBoundingClientRect()
+      return Number.parseFloat(getComputedStyle(element).opacity) >= 0.99
+        && Math.abs(rect.left - expected.left) <= 2
+        && Math.abs(rect.top - expected.top) <= 2
+        && Math.abs(rect.width - expected.width) <= 2
+        && Math.abs(rect.height - expected.height) <= 2
+    })
+  ), inlineSummaryRects)).toBe(true)
   await expect.poll(() => motionChrome.evaluateAll((elements, expectedRects) => {
     return elements.every((element, index) => {
       const expected = expectedRects[index]

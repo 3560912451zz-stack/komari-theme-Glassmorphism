@@ -149,7 +149,7 @@ function prepareEarthSceneMotion() {
   const summaryItems = indexedItems.filter(({ element }) => !element.hasAttribute('data-node-motion-item'))
   const nodeItems = indexedItems.filter(({ element }) => element.hasAttribute('data-node-motion-item'))
 
-  const configureItems = (items: typeof indexedItems, baseDelayMs: number) => {
+  const configureItems = (items: typeof indexedItems, baseDelayMs: number, staggerItems = true) => {
     items.forEach(({ element, rect, visualIndex }, sequenceIndex) => {
       const centerX = rect.left + rect.width / 2
       const centerY = rect.top + rect.height / 2
@@ -159,11 +159,13 @@ function prepareEarthSceneMotion() {
         ? viewportWidth - rect.left + 32
         : -(rect.right + 32)
       const exitY = Math.max(-32, Math.min(32, (centerY - viewportHeight / 2) * 0.08))
-      const order = Math.min(sequenceIndex, nodeItemStaggerLimit)
-      const returnOrder = Math.min(
-        Math.max(items.length - 1 - sequenceIndex, 0),
-        nodeItemStaggerLimit,
-      )
+      const order = staggerItems ? Math.min(sequenceIndex, nodeItemStaggerLimit) : 0
+      const returnOrder = staggerItems
+        ? Math.min(
+            Math.max(items.length - 1 - sequenceIndex, 0),
+            nodeItemStaggerLimit,
+          )
+        : 0
       const exitDelayMs = baseDelayMs + order * earthCardStaggerMs
       const returnDelayMs = returnOrder * earthCardReturnStaggerMs
 
@@ -179,7 +181,7 @@ function prepareEarthSceneMotion() {
     })
   }
 
-  configureItems(summaryItems, 0)
+  configureItems(summaryItems, 0, false)
   configureItems(nodeItems, earthNodeExitBaseDelayMs)
 
   root.querySelectorAll<HTMLElement>('[data-earth-toolbar-segment]').forEach((element) => {
