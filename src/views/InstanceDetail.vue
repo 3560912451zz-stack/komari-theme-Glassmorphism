@@ -162,7 +162,8 @@ const locationDisplay = computed(() => {
 })
 const providerDisplay = computed(() => {
   const parts: string[] = []
-  const cityName = formatCityNameZh(providerMetadata.value?.geo?.city)
+  const city = providerMetadata.value?.geo?.city?.trim()
+  const cityName = formatCityNameZh(city) || city
   if (cityName)
     parts.push(cityName)
   if (providerMetadata.value?.provider?.displayName)
