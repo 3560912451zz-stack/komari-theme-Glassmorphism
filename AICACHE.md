@@ -629,3 +629,10 @@
 - Development-only mock data lives in `src/dev/mockNodes.ts` and provides 8 varied nodes (including offline, high-CPU, GPU, long-name and traffic-warning examples) for checking the Tab card-exit sequence locally.
 - `src/utils/init.ts` loads the fixture only when both `import.meta.env.DEV` and `VITE_MOCK_NODES=true`; it initializes the existing Pinia stores and intentionally skips backend polling and WebSocket setup.
 - The switch is enabled by ignored `.env.development.local`, so the fixture is available at `http://127.0.0.1:4174/` without becoming a tracked site default. Store-level validation confirmed 8 visible nodes, 7 online nodes, card view, completed loading and no connection error.
+
+## 2026-08-15 detail location line (M4)
+
+- Added a compact location line below the node name in `src/views/InstanceDetail.vue`, using a map-pin icon and muted 11px text.
+- The line combines the asynchronously resolved city (Chinese mapping when available, original city name otherwise) with the node's public country/region. It falls back to the geo provider country code when the node region is unavailable.
+- Geo lookup remains permission-gated through the existing `providerGeoLookup` flow; unauthenticated visitors see the public region only and no IP is exposed.
+- Validation: `bun run lint`, `bun run type-check`, `bun run build`, and `git diff --check` passed. The full build produced the normal large-chunk warnings and a local release zip.
