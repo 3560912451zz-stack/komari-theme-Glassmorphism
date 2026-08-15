@@ -1,5 +1,6 @@
 const CITY_NAME_ZH_MAP: Record<string, string> = {
   'amsterdam': '阿姆斯特丹',
+  'amsterdam zuidoost': '阿姆斯特丹东南区',
   'ashburn': '阿什本',
   'atlanta': '亚特兰大',
   'bangkok': '曼谷',
@@ -10,6 +11,7 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'chicago': '芝加哥',
   'chongqing': '重庆',
   'dallas': '达拉斯',
+  'dallas fort worth': '达拉斯-沃思堡',
   'delhi': '德里',
   'denver': '丹佛',
   'dubai': '迪拜',
@@ -21,6 +23,7 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'helsinki': '赫尔辛基',
   'ho chi minh city': '胡志明市',
   'hong kong': '香港',
+  'new taipei': '新北',
   'istanbul': '伊斯坦布尔',
   'jakarta': '雅加达',
   'johannesburg': '约翰内斯堡',
@@ -28,6 +31,8 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'las vegas': '拉斯维加斯',
   'london': '伦敦',
   'los angeles': '洛杉矶',
+  'los angeles county': '洛杉矶县',
+  'la': '洛杉矶',
   'madrid': '马德里',
   'melbourne': '墨尔本',
   'miami': '迈阿密',
@@ -35,11 +40,14 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'moscow': '莫斯科',
   'mumbai': '孟买',
   'new york': '纽约',
+  'new york city': '纽约',
+  'nyc': '纽约',
   'osaka': '大阪',
   'paris': '巴黎',
   'phoenix': '凤凰城',
   'prague': '布拉格',
   'san francisco': '旧金山',
+  'sf': '旧金山',
   'san jose': '圣何塞',
   'sao paulo': '圣保罗',
   'seattle': '西雅图',
@@ -55,16 +63,20 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'vienna': '维也纳',
   'warsaw': '华沙',
   'washington': '华盛顿',
+  'washington dc': '华盛顿',
+  'washington d c': '华盛顿',
   'zurich': '苏黎世',
 }
 
 const CITY_SEPARATOR_REGEX = /[._-]+/g
 const CITY_SPACES_REGEX = /\s+/g
+const CITY_DIACRITIC_REGEX = /\p{Mark}/gu
 const CJK_UNIFIED_IDEOGRAPH_REGEX = /\p{Script=Han}/u
 
 function normalizeCityName(city: string): string {
   return city
-    .normalize('NFKC')
+    .normalize('NFKD')
+    .replace(CITY_DIACRITIC_REGEX, '')
     .toLowerCase()
     .replace(CITY_SEPARATOR_REGEX, ' ')
     .replace(CITY_SPACES_REGEX, ' ')
