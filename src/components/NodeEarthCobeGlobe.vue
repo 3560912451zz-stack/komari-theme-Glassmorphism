@@ -85,13 +85,13 @@ const {
   clusterKey,
 } = useNodeGeoClusters({ nodes: () => props.nodes })
 
-function markerId(code: string): string {
-  return `cdn-${code.toLowerCase()}`
+function markerId(nodeUuid: string): string {
+  return `node-${nodeUuid}`
 }
 
 const markers = computed<Marker[]>(() => {
   return regionClusters.value.map(cluster => ({
-    id: markerId(cluster.id),
+    id: markerId(cluster.nodeUuid),
     location: cluster.coord,
     size: 0,
   }))

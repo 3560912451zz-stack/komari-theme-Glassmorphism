@@ -70,8 +70,8 @@ function projectCoord(coord: [number, number]): MapPoint {
   }
 }
 
-function formatClusterMeta(cluster: { code: string, asn?: string, org?: string }): string {
-  const location = cluster.code || 'NODE'
+function formatClusterMeta(cluster: { code: string, label: string, asn?: string, org?: string }): string {
+  const location = cluster.label || cluster.code || 'NODE'
   const provider = cluster.asn || cluster.org
   return provider ? `${provider} · ${location}` : location
 }
@@ -82,7 +82,7 @@ const clusterMarkers = computed<ClusterMarker[]>(() => regionClusters.value.map(
     id: cluster.id,
     index: index + 1,
     code: cluster.code,
-    label: cluster.label,
+    label: cluster.nodeName,
     meta: formatClusterMeta(cluster),
     x: point.x,
     y: point.y,
