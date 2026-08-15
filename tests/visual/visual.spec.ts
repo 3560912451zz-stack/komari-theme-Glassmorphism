@@ -382,6 +382,161 @@ test('plain Tab toggles immersive earth and Escape exits', async ({ page }) => {
   await expectEarthReturnsToRect(earthStage, inlineRect)
 })
 
+test('immersive earth keeps renderer pixels continuous across the exit handoff', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installKomariFixture(page, { disablePageAnimation: false })
+  const earthStage = await openInteractiveHome(page)
+  const earthMotionFrame = page.getByTestId('earth-motion-frame')
+
+  interface EarthExitSample {
+    canvasBackingHeight: number
+    canvasBackingWidth: number
+    canvasHeight: number
+    canvasLeft: number
+    canvasTop: number
+    canvasWidth: number
+    flagHeight: number
+    flagWidth: number
+    frameHeight: number
+    frameLeft: number
+    frameTop: number
+    frameWidth: number
+    hostHeight: number
+    hostLeft: number
+    hostTop: number
+    hostWidth: number
+    placeholderHeight: number
+    placeholderLeft: number
+    placeholderTop: number
+    placeholderWidth: number
+    state: string
+    visibility: string
+  }
+
+  async function captureExit(key: 'Escape' | 'Tab'): Promise<EarthExitSample[]> {
+    const samplesPromise = page.evaluate(() => new Promise<EarthExitSample[]>((resolve) => {
+      const stage = document.querySelector<HTMLElement>('[data-testid="earth-stage"]')
+      const frame = document.querySelector<HTMLElement>('[data-testid="earth-motion-frame"]')
+      if (!stage || !frame) {
+        resolve([])
+        return
+      }
+
+      const samples: EarthExitSample[] = []
+      let inlineSamples = 0
+      let ticks = 0
+      const sample = () => {
+        ticks += 1
+        const canvas = frame.querySelector<HTMLCanvasElement>('canvas')
+        const host = frame.querySelector<HTMLElement>('.earth-globe-host')
+        const flag = frame.querySelector<HTMLElement>('.earth-label-flag')
+        const canvasRect = canvas?.getBoundingClientRect()
+        const hostRect = host?.getBoundingClientRect()
+        const flagRect = flag?.getBoundingClientRect()
+        const frameRect = frame.getBoundingClientRect()
+        const placeholder = document.querySelector<HTMLElement>('.earth-stage-placeholder')
+        const placeholderRect = placeholder?.getBoundingClientRect()
+        const state = stage.dataset.state ?? ''
+        samples.push({
+          canvasBackingHeight: canvas?.height ?? 0,
+          canvasBackingWidth: canvas?.width ?? 0,
+          canvasHeight: canvasRect?.height ?? 0,
+          canvasLeft: canvasRect?.left ?? 0,
+          canvasTop: canvasRect?.top ?? 0,
+          canvasWidth: canvasRect?.width ?? 0,
+          flagHeight: flagRect?.height ?? 0,
+          flagWidth: flagRect?.width ?? 0,
+          frameHeight: frameRect.height,
+          frameLeft: frameRect.left,
+          frameTop: frameRect.top,
+          frameWidth: frameRect.width,
+          hostHeight: hostRect?.height ?? 0,
+          hostLeft: hostRect?.left ?? 0,
+          hostTop: hostRect?.top ?? 0,
+          hostWidth: hostRect?.width ?? 0,
+          placeholderHeight: placeholderRect?.height ?? 0,
+          placeholderLeft: placeholderRect?.left ?? 0,
+          placeholderTop: placeholderRect?.top ?? 0,
+          placeholderWidth: placeholderRect?.width ?? 0,
+          state,
+          visibility: getComputedStyle(frame).visibility,
+        })
+        if (state === 'inline')
+          inlineSamples += 1
+
+        if (inlineSamples >= 4 || ticks >= 120) {
+          resolve(samples)
+          return
+        }
+        requestAnimationFrame(sample)
+      }
+
+      requestAnimationFrame(sample)
+    }))
+
+    await page.keyboard.press(key)
+    const samples = await samplesPromise
+    const firstInlineIndex = samples.findIndex(sample => sample.state === 'inline')
+    const beforeTeleport = samples[firstInlineIndex - 1]
+    const firstInline = samples[firstInlineIndex]
+    const inlineRevealSamples = samples.filter(sample => sample.state === 'inline')
+    expect(firstInlineIndex).toBeGreaterThan(0)
+    expect(beforeTeleport?.state).toBe('fullscreen')
+    expect(inlineRevealSamples.length).toBeGreaterThanOrEqual(3)
+
+    const fullscreenBackingWidth = samples[0]?.canvasBackingWidth ?? 0
+    const fullscreenBackingHeight = samples[0]?.canvasBackingHeight ?? 0
+    expect(fullscreenBackingWidth).toBeGreaterThan(0)
+    expect(fullscreenBackingHeight).toBeGreaterThan(0)
+    expect(samples.every(sample => sample.canvasBackingWidth === fullscreenBackingWidth)).toBe(true)
+    expect(samples.every(sample => sample.canvasBackingHeight === fullscreenBackingHeight)).toBe(true)
+
+    // A delayed globe.gl resize used to leave the host at 474.88 px while its
+    // canvas expanded to 518.97 px for one paint. Check every sampled frame.
+    expect(Math.max(...samples.map(sample => Math.abs(sample.canvasLeft - sample.hostLeft)))).toBeLessThanOrEqual(1)
+    expect(Math.max(...samples.map(sample => Math.abs(sample.canvasTop - sample.hostTop)))).toBeLessThanOrEqual(1)
+    expect(Math.max(...samples.map(sample => Math.abs(sample.canvasWidth - sample.hostWidth)))).toBeLessThanOrEqual(1)
+    expect(Math.max(...samples.map(sample => Math.abs(sample.canvasHeight - sample.hostHeight)))).toBeLessThanOrEqual(1)
+
+    // Teleport must preserve the already-rendered endpoint, including fixed-
+    // pixel HTML labels layered over the WebGL canvas.
+    expect(Math.abs((beforeTeleport?.frameLeft ?? 0) - (firstInline?.frameLeft ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.frameTop ?? 0) - (firstInline?.frameTop ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.frameWidth ?? 0) - (firstInline?.frameWidth ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.frameHeight ?? 0) - (firstInline?.frameHeight ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.canvasLeft ?? 0) - (firstInline?.canvasLeft ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.canvasTop ?? 0) - (firstInline?.canvasTop ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.canvasWidth ?? 0) - (firstInline?.canvasWidth ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.canvasHeight ?? 0) - (firstInline?.canvasHeight ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((beforeTeleport?.flagWidth ?? 0) - (firstInline?.flagWidth ?? 0))).toBeLessThanOrEqual(0.25)
+    expect(Math.abs((beforeTeleport?.flagHeight ?? 0) - (firstInline?.flagHeight ?? 0))).toBeLessThanOrEqual(0.25)
+
+    expect(inlineRevealSamples[0]?.visibility).toBe('visible')
+    expect(inlineRevealSamples.at(-1)?.visibility).toBe('visible')
+    const settledInline = inlineRevealSamples.at(-1)
+    expect(Math.abs((settledInline?.frameLeft ?? 0) - (settledInline?.placeholderLeft ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((settledInline?.frameTop ?? 0) - (settledInline?.placeholderTop ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((settledInline?.frameWidth ?? 0) - (settledInline?.placeholderWidth ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((settledInline?.frameHeight ?? 0) - (settledInline?.placeholderHeight ?? 0))).toBeLessThanOrEqual(1)
+    return samples
+  }
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expect(earthMotionFrame).toBeVisible()
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+
+  await captureExit('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'inline')
+
+  await clearPageFocus(page)
+  await page.keyboard.press('Tab')
+  await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
+  await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+  await captureExit('Escape')
+})
+
 test('immersive earth centers compactly while visible node cards exit in order and return', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 })
   await installKomariFixture(page, { disablePageAnimation: false })

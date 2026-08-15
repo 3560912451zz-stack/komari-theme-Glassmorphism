@@ -95,6 +95,8 @@ const isEarthDetached = ref(false)
 const isEarthExpanded = ref(false)
 const suppressEarthStageTransition = ref(false)
 const earthTiledFullscreenFrameSize = ref<{ height: number, width: number } | null>(null)
+const earthPinnedFrameSize = ref<{ height: number, width: number } | null>(null)
+const earthPinnedFrameTransform = ref<string | null>(null)
 const summaryNodes = computed(() => props.nodes ?? nodesStore.visibleNodes)
 const summaryTransitionKey = computed(() => props.transitionKey ?? nodesStore.visibleNodes.length)
 const metricSwitchTransitionProps = computed(() => ({
@@ -773,13 +775,20 @@ const earthStageStyle = computed<Record<string, string>>(() => ({
   '--earth-immersive-easing': UI_CONFIG.motion.earthImmersiveEasing,
 }))
 const earthMotionFrameStyle = computed<Record<string, string> | undefined>(() => {
-  const size = earthTiledFullscreenFrameSize.value
-  if (!isEarthDetached.value || !isTiledEarth.value || !size)
+  const size = earthPinnedFrameSize.value
+    ?? (isEarthDetached.value && isTiledEarth.value ? earthTiledFullscreenFrameSize.value : null)
+  const transform = earthPinnedFrameTransform.value
+  if (!size && !transform)
     return undefined
 
   return {
-    height: `${size.height}px`,
-    width: `${size.width}px`,
+    ...(size
+      ? {
+          height: `${size.height}px`,
+          width: `${size.width}px`,
+        }
+      : {}),
+    ...(transform ? { transform } : {}),
   }
 })
 
@@ -788,7 +797,6 @@ let earthFrameAnimation: Animation | null = null
 let documentScrollLocked = false
 let previousBodyOverflow = ''
 let previousDocumentOverflow = ''
-let previousDocumentScrollbarGutter = ''
 
 function toEarthFrameRect(rect: DOMRect): EarthFrameRect {
   return {
@@ -806,8 +814,6 @@ function lockDocumentScroll() {
   documentScrollLocked = true
   previousBodyOverflow = document.body.style.overflow
   previousDocumentOverflow = document.documentElement.style.overflow
-  previousDocumentScrollbarGutter = document.documentElement.style.scrollbarGutter
-  document.documentElement.style.scrollbarGutter = 'stable'
   document.body.style.overflow = 'hidden'
   document.documentElement.style.overflow = 'hidden'
 }
@@ -818,12 +824,72 @@ function unlockDocumentScroll() {
 
   document.body.style.overflow = previousBodyOverflow
   document.documentElement.style.overflow = previousDocumentOverflow
-  document.documentElement.style.scrollbarGutter = previousDocumentScrollbarGutter
   documentScrollLocked = false
 }
 
 function getEarthFrame(): HTMLElement | null {
   return earthMotionFrameRef.value
+}
+
+function pinEarthFrameRenderer(frame: HTMLElement) {
+  if (isTiledEarth.value || earthPinnedFrameSize.value)
+    return
+
+  const rect = frame.getBoundingClientRect()
+  earthPinnedFrameSize.value = {
+    height: rect.height,
+    width: rect.width,
+  }
+}
+
+function clearEarthFrameRendererPin() {
+  earthPinnedFrameSize.value = null
+  earthPinnedFrameTransform.value = null
+}
+
+function getCenteredFrameRectInRect(containerRect: EarthFrameRect, frame: HTMLElement): EarthFrameRect {
+  const width = earthPinnedFrameSize.value?.width ?? frame.offsetWidth
+  const height = earthPinnedFrameSize.value?.height ?? frame.offsetHeight
+  return {
+    left: containerRect.left + (containerRect.width - width) / 2,
+    top: containerRect.top + (containerRect.height - height) / 2,
+    width,
+    height,
+  }
+}
+
+function getCenteredFrameRect(stage: HTMLElement, frame: HTMLElement): EarthFrameRect {
+  return getCenteredFrameRectInRect(toEarthFrameRect(stage.getBoundingClientRect()), frame)
+}
+
+function getExpectedDetachedFrameRect(frame: HTMLElement): EarthFrameRect {
+  const width = earthPinnedFrameSize.value?.width ?? frame.offsetWidth
+  const height = earthPinnedFrameSize.value?.height ?? frame.offsetHeight
+  return {
+    left: (window.innerWidth - width) / 2,
+    top: (window.innerHeight - height) / 2,
+    width,
+    height,
+  }
+}
+
+function updatePinnedFrameTransform(targetRect: EarthFrameRect, baseRect: EarthFrameRect) {
+  if (!earthPinnedFrameSize.value)
+    return
+  earthPinnedFrameTransform.value = getFlipTransform(targetRect, baseRect)
+}
+
+function syncPinnedFrameToPlaceholder() {
+  const stage = earthStageRef.value
+  const frame = getEarthFrame()
+  const placeholder = earthPlaceholderRef.value
+  if (!earthPinnedFrameSize.value || isEarthDetached.value || !stage || !frame || !placeholder)
+    return
+
+  updatePinnedFrameTransform(
+    toEarthFrameRect(placeholder.getBoundingClientRect()),
+    getCenteredFrameRect(stage, frame),
+  )
 }
 
 function updateTiledFullscreenFrameSize(placeholderRect: EarthFrameRect) {
@@ -914,6 +980,38 @@ function waitForEarthFrameAnimation(animation: Animation): Promise<void> {
   })
 }
 
+function waitForEarthRendererSize(frame: HTMLElement, transitionSequence: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let samples = 0
+    const check = () => {
+      if (transitionSequence !== earthTransitionSequence) {
+        resolve(false)
+        return
+      }
+
+      samples += 1
+      const canvas = frame.querySelector('canvas')
+      const frameRect = frame.getBoundingClientRect()
+      const frameWidth = frameRect.width
+      const frameHeight = frameRect.height
+      const rendererReady = Boolean(
+        canvas
+        && canvas.width > 0
+        && canvas.height > 0
+        && Math.abs(canvas.clientWidth - frameWidth) <= 1
+        && Math.abs(canvas.clientHeight - frameHeight) <= 1,
+      )
+      if (rendererReady || samples >= 180) {
+        resolve(true)
+        return
+      }
+
+      window.requestAnimationFrame(check)
+    }
+    window.requestAnimationFrame(check)
+  })
+}
+
 function forceEarthInline() {
   earthTransitionSequence += 1
   const frame = getEarthFrame()
@@ -922,6 +1020,7 @@ function forceEarthInline() {
   cancelEarthFrameAnimation()
   suppressEarthStageTransition.value = true
   isEarthExpanded.value = false
+  clearEarthFrameRendererPin()
   isEarthDetached.value = false
   earthTiledFullscreenFrameSize.value = null
   unlockDocumentScroll()
@@ -942,13 +1041,17 @@ async function enterEarthImmersive() {
 
   const transitionSequence = ++earthTransitionSequence
   const wasDetached = isEarthDetached.value
+  const hadPinnedRenderer = Boolean(earthPinnedFrameSize.value)
   const fromRect = toEarthFrameRect(frame.getBoundingClientRect())
   const placeholderRect = toEarthFrameRect(placeholder.getBoundingClientRect())
   cancelEarthFrameAnimation()
 
   if (!wasDetached) {
     updateTiledFullscreenFrameSize(placeholderRect)
-    frame.style.visibility = 'hidden'
+    if (hadPinnedRenderer)
+      updatePinnedFrameTransform(fromRect, getExpectedDetachedFrameRect(frame))
+    else
+      frame.style.visibility = 'hidden'
     suppressEarthStageTransition.value = true
     isEarthExpanded.value = false
     isEarthDetached.value = true
@@ -965,8 +1068,29 @@ async function enterEarthImmersive() {
   if (!teleportedStage || !teleportedFrame)
     return
 
-  const fullRect = toEarthFrameRect(teleportedFrame.getBoundingClientRect())
+  if (!hadPinnedRenderer && !isTiledEarth.value) {
+    if (!await waitForEarthRendererSize(teleportedFrame, transitionSequence))
+      return
+    pinEarthFrameRenderer(teleportedFrame)
+    await nextTick()
+  }
+
+  if (transitionSequence !== earthTransitionSequence || !props.immersive)
+    return
+
+  const fullRect = earthPinnedFrameSize.value
+    ? getCenteredFrameRect(teleportedStage, teleportedFrame)
+    : toEarthFrameRect(teleportedFrame.getBoundingClientRect())
+  if (earthPinnedFrameSize.value) {
+    updatePinnedFrameTransform(fromRect, fullRect)
+    await nextTick()
+  }
+
+  if (transitionSequence !== earthTransitionSequence || !props.immersive)
+    return
+
   if (!earthMotionAllowed.value) {
+    earthPinnedFrameTransform.value = null
     suppressEarthStageTransition.value = false
     isEarthExpanded.value = true
     teleportedFrame.style.removeProperty('visibility')
@@ -986,7 +1110,11 @@ async function enterEarthImmersive() {
   isEarthExpanded.value = true
   teleportedFrame.style.removeProperty('visibility')
   animation.play()
-  void waitForEarthFrameAnimation(animation).then(() => {
+  void waitForEarthFrameAnimation(animation).then(async () => {
+    if (earthFrameAnimation !== animation || !props.immersive)
+      return
+    earthPinnedFrameTransform.value = null
+    await nextTick()
     if (earthFrameAnimation !== animation || !props.immersive)
       return
     earthFrameAnimation = null
@@ -999,6 +1127,8 @@ async function exitEarthImmersive() {
 
   if (!isEarthDetached.value) {
     unlockDocumentScroll()
+    getEarthFrame()?.style.removeProperty('visibility')
+    suppressEarthStageTransition.value = false
     return
   }
 
@@ -1012,7 +1142,9 @@ async function exitEarthImmersive() {
 
   const fromRect = toEarthFrameRect(frame.getBoundingClientRect())
   cancelEarthFrameAnimation()
-  const fullRect = toEarthFrameRect(frame.getBoundingClientRect())
+  const fullRect = earthPinnedFrameSize.value
+    ? getCenteredFrameRect(stage, frame)
+    : toEarthFrameRect(frame.getBoundingClientRect())
   const inlineRect = toEarthFrameRect(placeholder.getBoundingClientRect())
   const animation = createEarthFrameAnimation(frame, fromRect, inlineRect, fullRect)
   suppressEarthStageTransition.value = false
@@ -1024,15 +1156,32 @@ async function exitEarthImmersive() {
   if (transitionSequence !== earthTransitionSequence || props.immersive)
     return
 
-  frame.style.visibility = 'hidden'
-  cancelEarthFrameAnimation()
   suppressEarthStageTransition.value = true
+  if (earthPinnedFrameSize.value) {
+    const targetRect = toEarthFrameRect(placeholder.getBoundingClientRect())
+    updatePinnedFrameTransform(targetRect, getCenteredFrameRectInRect(targetRect, frame))
+  }
+  else {
+    frame.style.visibility = 'hidden'
+  }
   isEarthDetached.value = false
   earthTiledFullscreenFrameSize.value = null
+  cancelEarthFrameAnimation()
   await nextTick()
-  getEarthFrame()?.style.removeProperty('visibility')
-  suppressEarthStageTransition.value = false
+  if (transitionSequence !== earthTransitionSequence || props.immersive)
+    return
+
   unlockDocumentScroll()
+  if (earthPinnedFrameSize.value) {
+    syncPinnedFrameToPlaceholder()
+    await nextTick()
+  }
+  else {
+    frame.style.removeProperty('visibility')
+  }
+  if (transitionSequence !== earthTransitionSequence || props.immersive)
+    return
+  suppressEarthStageTransition.value = false
 }
 
 function requestEarthImmersiveExit() {
@@ -1072,13 +1221,19 @@ watch(earthMotionAllowed, (motionAllowed) => {
 
   suppressEarthStageTransition.value = false
   isEarthExpanded.value = true
+  earthPinnedFrameTransform.value = null
   getEarthFrame()?.style.removeProperty('visibility')
 })
 
 useEventListener(window, 'resize', () => {
   const placeholder = earthPlaceholderRef.value
-  if (!isEarthDetached.value || !placeholder)
+  if (!placeholder)
     return
+
+  if (!isEarthDetached.value) {
+    syncPinnedFrameToPlaceholder()
+    return
+  }
 
   if (isTiledEarth.value)
     updateTiledFullscreenFrameSize(toEarthFrameRect(placeholder.getBoundingClientRect()))
@@ -1093,6 +1248,7 @@ useEventListener(window, 'resize', () => {
   }
 
   isEarthExpanded.value = true
+  earthPinnedFrameTransform.value = null
   getEarthFrame()?.style.removeProperty('visibility')
 })
 
@@ -1199,6 +1355,7 @@ onMounted(async () => {
               isTiledEarth && 'earth-stage--tiled',
               isEarthDetached && 'earth-stage--detached',
               isEarthExpanded && 'earth-stage--expanded',
+              earthPinnedFrameSize && 'earth-stage--renderer-pinned',
               (!earthMotionAllowed || suppressEarthStageTransition) && 'earth-stage--instant',
             ]"
             :style="earthStageStyle"
@@ -1383,6 +1540,12 @@ onMounted(async () => {
 }
 
 .earth-stage--detached:not(.earth-stage--tiled) :deep(.earth-globe-frame) {
+  width: 100%;
+  max-width: none;
+  flex: none;
+}
+
+.earth-stage--renderer-pinned:not(.earth-stage--tiled) :deep(.earth-globe-frame) {
   width: 100%;
   max-width: none;
   flex: none;

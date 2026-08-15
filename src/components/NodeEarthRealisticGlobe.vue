@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { GlobeInstance } from 'globe.gl'
-import type { MeshPhongMaterial, Texture } from 'three'
+import type { MeshPhongMaterial, PerspectiveCamera, Texture } from 'three'
 import type { NodeData } from '@/stores/nodes'
 import {
   useDocumentVisibility,
@@ -114,6 +114,49 @@ function resizeGlobe() {
     return
   const { width, height } = getRenderSize()
   globe.width(width).height(height)
+
+  const renderer = globe.renderer()
+  renderer.setSize(width, height)
+  globe.postProcessingComposer().setSize(width, height)
+
+  const camera = globe.camera() as PerspectiveCamera
+  camera.aspect = width / height
+  camera.updateProjectionMatrix()
+
+  const sceneContainer = renderer.domElement.parentElement
+  if (sceneContainer) {
+    sceneContainer.style.width = `${width}px`
+    sceneContainer.style.height = `${height}px`
+    for (const layer of Array.from(sceneContainer.children)) {
+      if (!(layer instanceof HTMLElement))
+        continue
+      layer.style.width = `${width}px`
+      layer.style.height = `${height}px`
+    }
+  }
+}
+
+function waitForGlobeResize(width: number, height: number): Promise<void> {
+  return new Promise((resolve) => {
+    let samples = 0
+    const check = () => {
+      samples += 1
+      const canvas = globe?.renderer().domElement
+      if (
+        !canvas
+        || (
+          Math.abs(canvas.clientWidth - width) <= 1
+          && Math.abs(canvas.clientHeight - height) <= 1
+        )
+        || samples >= 60
+      ) {
+        resolve()
+        return
+      }
+      window.requestAnimationFrame(check)
+    }
+    window.requestAnimationFrame(check)
+  })
 }
 
 function resetPointOfView(transitionMs = 0) {
@@ -241,6 +284,11 @@ async function startGlobe() {
     applyMaterialStyle()
     applyControls()
     resetPointOfView(0)
+    globe.resumeAnimation()
+    resizeGlobe()
+    await waitForGlobeResize(width, height)
+    if (destroyed || !globe)
+      return
     if (!shouldRender.value)
       globe.pauseAnimation()
   }
