@@ -322,15 +322,18 @@ function buildNodeMetadataItems(node: NodeData): NodeMetadataItem[] {
       }
       case 'city': {
         const city = providerMetadata?.geo?.city
-        const cityName = formatCityNameZh(city)
+        const cityName = formatCityNameZh(city) || city?.trim() || ''
         if (!cityName)
           break
+
+        const countryCode = providerMetadata?.geo?.countryCode?.trim().toUpperCase()
+        const countryName = countryCode ? getRegionDisplayName(countryCode) || countryCode : ''
 
         items.push({
           key: 'city',
           value: cityName,
           icon: 'tabler:map-pin',
-          title: [cityName, providerMetadata?.geo?.countryCode].filter(Boolean).join(' · '),
+          title: [cityName, countryName].filter(Boolean).join(' · '),
           variant: 'outline',
           class: 'max-w-[8rem] bg-background/45 text-foreground/80 border-border/60',
         })
