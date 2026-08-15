@@ -14,6 +14,7 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'dallas fort worth': '达拉斯-沃思堡',
   'delhi': '德里',
   'denver': '丹佛',
+  'douglas': '道格拉斯',
   'dubai': '迪拜',
   'dusseldorf': '杜塞尔多夫',
   'frankfurt': '法兰克福',
@@ -55,6 +56,8 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
   'shanghai': '上海',
   'shenzhen': '深圳',
   'singapore': '新加坡',
+  'saint johns': '圣约翰',
+  'st johns': '圣约翰',
   'stockholm': '斯德哥尔摩',
   'sydney': '悉尼',
   'taipei': '台北',
@@ -71,6 +74,7 @@ const CITY_NAME_ZH_MAP: Record<string, string> = {
 const CITY_SEPARATOR_REGEX = /[._-]+/g
 const CITY_SPACES_REGEX = /\s+/g
 const CITY_DIACRITIC_REGEX = /\p{Mark}/gu
+const CITY_APOSTROPHE_REGEX = /['’`]+/g
 const CJK_UNIFIED_IDEOGRAPH_REGEX = /\p{Script=Han}/u
 
 function normalizeCityName(city: string): string {
@@ -78,6 +82,7 @@ function normalizeCityName(city: string): string {
     .normalize('NFKD')
     .replace(CITY_DIACRITIC_REGEX, '')
     .toLowerCase()
+    .replace(CITY_APOSTROPHE_REGEX, '')
     .replace(CITY_SEPARATOR_REGEX, ' ')
     .replace(CITY_SPACES_REGEX, ' ')
     .trim()
