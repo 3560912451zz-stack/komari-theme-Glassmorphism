@@ -1,6 +1,7 @@
 import type { NodeData } from '@/stores/nodes'
 import type { IpGeo } from '@/utils/ipGeoHelper'
 import type { ProviderResolveResult } from '@/utils/providerInfo'
+import { getCountryCodeFromRegion } from '@/utils/geoHelper'
 import { lookupIpGeo } from '@/utils/ipGeoHelper'
 import { resolveProviderInfo } from '@/utils/providerInfo'
 
@@ -39,9 +40,11 @@ export function getNodeProviderFingerprint(node: NodeData, customAliases: string
 }
 
 export async function lookupNodeGeo(node: NodeData): Promise<IpGeo | null> {
+  const configuredCode = getCountryCodeFromRegion(node.region)
   for (const ip of getNodeIps(node)) {
     const geo = await lookupIpGeo(ip)
-    if (geo)
+    const geoCode = getCountryCodeFromRegion(geo?.countryCode)
+    if (geo && (!configuredCode || !geoCode || configuredCode === geoCode))
       return geo
   }
   return null
