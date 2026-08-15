@@ -148,6 +148,18 @@ function toggleCurrentFavorite(): void {
 // 机房/厂商展示：城市 · 厂商 · ASN（缺项自动省略）
 const providerMetadata = computed(() => data.value ? getNodeProviderMetadata(data.value) : null)
 const vpsProvider = computed(() => providerMetadata.value?.provider ?? null)
+const locationDisplay = computed(() => {
+  const node = data.value
+  if (!node)
+    return ''
+
+  const geo = providerMetadata.value?.geo
+  const city = geo?.city?.trim()
+  const cityName = formatCityNameZh(city) || city
+  const countryName = getRegionDisplayName(node.region) || getRegionDisplayName(geo?.countryCode ?? '') || geo?.countryCode?.trim().toUpperCase()
+
+  return [cityName, countryName].filter(Boolean).join(' · ')
+})
 const providerDisplay = computed(() => {
   const parts: string[] = []
   const cityName = formatCityNameZh(providerMetadata.value?.geo?.city)
@@ -493,9 +505,20 @@ const metricCards = computed<MetricCard[]>(() => appStore.detailMetricCardOrder.
         <Button variant="ghost" size="icon-sm" class="bg-background/50 hover:bg-background" aria-label="返回首页" @click="router.push('/')">
           <Icon icon="tabler:arrow-left" :width="16" :height="16" />
         </Button>
-        <div class="min-w-0 text-lg font-bold flex gap-2 items-center">
+        <div class="min-w-0 flex max-w-full items-center gap-2">
           <img :src="`/images/flags/${getRegionCode(data.region)}.svg`" :alt="getRegionAltText(data.region)" class="size-6">
-          <span class="truncate">{{ data.name }}</span>
+          <div class="min-w-0 flex flex-col gap-0.5">
+            <span class="truncate text-lg font-bold leading-tight">{{ data.name }}</span>
+            <div
+              v-if="locationDisplay"
+              class="flex min-w-0 items-center gap-1 text-[11px] font-normal leading-tight text-muted-foreground"
+              :title="`地理位置：${locationDisplay}`"
+              aria-label="节点地理位置"
+            >
+              <Icon icon="tabler:map-pin" :width="12" :height="12" class="shrink-0 opacity-70" />
+              <span class="truncate">{{ locationDisplay }}</span>
+            </div>
+          </div>
         </div>
         <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
           {{ data.online ? '在线' : '离线' }}
