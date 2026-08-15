@@ -1,3 +1,5 @@
+import { translateCityNameZh } from '@/utils/cityNameHelper'
+
 /**
  * Resolve IP geolocation through a small provider fallback chain.
  * Results stay in the active page session only; no persistent browser cache is used.
@@ -7,6 +9,7 @@ export interface IpGeo {
   lat: number
   lng: number
   city?: string
+  cityZh?: string
   countryCode?: string
   /** ASN 组织 / ISP 名称（用于识别厂商） */
   org?: string
@@ -145,9 +148,9 @@ const fromIpapiCo: Provider = async (ip) => {
   }
 }
 
-/** ipwho.is：latitude/longitude/city/country_code，connection.{org,isp,asn} */
+/** ipwho.is: localized city plus latitude/longitude/country_code. */
 const fromIpwhois: Provider = async (ip) => {
-  const res = await fetchWithTimeout(`https://ipwho.is/${normalizeIpPath(ip)}`)
+  const res = await fetchWithTimeout(`https://ipwho.is/${normalizeIpPath(ip)}?lang=zh-CN`)
   if (!res.ok)
     return null
   const d = await safeJson(res)
@@ -169,9 +172,9 @@ const fromIpwhois: Provider = async (ip) => {
 }
 
 const PROVIDERS: ProviderEntry[] = [
+  { id: 'ipwho.is', lookup: fromIpwhois },
   { id: 'ip.sb', lookup: fromIpSb },
   { id: 'ipinfo.io', lookup: fromIpinfo },
-  { id: 'ipwho.is', lookup: fromIpwhois },
   { id: 'ipapi.co', lookup: fromIpapiCo },
 ]
 
@@ -222,7 +225,8 @@ export async function lookupIpGeo(ip: string): Promise<IpGeo | null> {
         const geo = await provider.lookup(normalizedIp)
         if (geo && isValidGeo(geo)) {
           markProviderSuccess(provider.id)
-          return geo
+          const cityZh = await translateCityNameZh(geo.city)
+          return cityZh ? { ...geo, cityZh } : geo
         }
         markProviderFailure(provider.id)
       }

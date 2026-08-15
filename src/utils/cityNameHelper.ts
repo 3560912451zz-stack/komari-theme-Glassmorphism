@@ -1,101 +1,164 @@
-const CITY_NAME_ZH_MAP: Record<string, string> = {
-  'amsterdam': '阿姆斯特丹',
-  'amsterdam zuidoost': '阿姆斯特丹东南区',
-  'ashburn': '阿什本',
-  'atlanta': '亚特兰大',
-  'bangkok': '曼谷',
-  'beijing': '北京',
-  'bengaluru': '班加罗尔',
-  'berlin': '柏林',
-  'buffalo': '布法罗',
-  'chicago': '芝加哥',
-  'chongqing': '重庆',
-  'dallas': '达拉斯',
-  'dallas fort worth': '达拉斯-沃思堡',
-  'delhi': '德里',
-  'denver': '丹佛',
-  'douglas': '道格拉斯',
-  'dubai': '迪拜',
-  'dusseldorf': '杜塞尔多夫',
-  'frankfurt': '法兰克福',
-  'fremont': '弗里蒙特',
-  'guangzhou': '广州',
-  'hamburg': '汉堡',
-  'helsinki': '赫尔辛基',
-  'ho chi minh city': '胡志明市',
-  'hong kong': '香港',
-  'new taipei': '新北',
-  'istanbul': '伊斯坦布尔',
-  'jakarta': '雅加达',
-  'johannesburg': '约翰内斯堡',
-  'kuala lumpur': '吉隆坡',
-  'las vegas': '拉斯维加斯',
-  'london': '伦敦',
-  'los angeles': '洛杉矶',
-  'los angeles county': '洛杉矶县',
-  'la': '洛杉矶',
-  'madrid': '马德里',
-  'melbourne': '墨尔本',
-  'miami': '迈阿密',
-  'milan': '米兰',
-  'moscow': '莫斯科',
-  'mumbai': '孟买',
-  'new york': '纽约',
-  'new york city': '纽约',
-  'nyc': '纽约',
-  'osaka': '大阪',
-  'paris': '巴黎',
-  'phoenix': '凤凰城',
-  'prague': '布拉格',
-  'san francisco': '旧金山',
-  'sf': '旧金山',
-  'san jose': '圣何塞',
-  'sao paulo': '圣保罗',
-  'seattle': '西雅图',
-  'seoul': '首尔',
-  'shanghai': '上海',
-  'shenzhen': '深圳',
-  'singapore': '新加坡',
-  'saint johns': '圣约翰',
-  'st johns': '圣约翰',
-  'stockholm': '斯德哥尔摩',
-  'sydney': '悉尼',
-  'taipei': '台北',
-  'tokyo': '东京',
-  'toronto': '多伦多',
-  'vienna': '维也纳',
-  'warsaw': '华沙',
-  'washington': '华盛顿',
-  'washington dc': '华盛顿',
-  'washington d c': '华盛顿',
-  'zurich': '苏黎世',
-}
+/**
+ * City localization is resolved at runtime. The page keeps a small in-memory
+ * cache for the current session, but never writes city translations to disk.
+ */
 
-const CITY_SEPARATOR_REGEX = /[._-]+/g
-const CITY_SPACES_REGEX = /\s+/g
-const CITY_DIACRITIC_REGEX = /\p{Mark}/gu
-const CITY_APOSTROPHE_REGEX = /['’`]+/g
 const CJK_UNIFIED_IDEOGRAPH_REGEX = /\p{Script=Han}/u
+const CITY_WHITESPACE_REGEX = /\s+/g
+const CITY_TRANSLATION_TIMEOUT_MS = 1800
+const CITY_TRANSLATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const CITY_TRANSLATION_FAILURE_TTL_MS = 5 * 60 * 1000
+const CITY_TRANSLATION_CACHE_MAX_SIZE = 512
 
-function normalizeCityName(city: string): string {
-  return city
-    .normalize('NFKD')
-    .replace(CITY_DIACRITIC_REGEX, '')
-    .toLowerCase()
-    .replace(CITY_APOSTROPHE_REGEX, '')
-    .replace(CITY_SEPARATOR_REGEX, ' ')
-    .replace(CITY_SPACES_REGEX, ' ')
-    .trim()
+interface TranslationCacheEntry {
+  value: string | null
+  expiresAt: number
 }
 
+const translationCache = new Map<string, TranslationCacheEntry>()
+const translationInflight = new Map<string, Promise<string | null>>()
+
+function isChineseText(value: string): boolean {
+  return CJK_UNIFIED_IDEOGRAPH_REGEX.test(value)
+}
+
+function normalizeTranslationKey(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(CITY_WHITESPACE_REGEX, ' ')
+    .trim()
+    .toLocaleLowerCase()
+}
+
+function rememberTranslation(key: string, value: string | null): void {
+  translationCache.delete(key)
+  translationCache.set(key, {
+    value,
+    expiresAt: Date.now() + (value ? CITY_TRANSLATION_CACHE_TTL_MS : CITY_TRANSLATION_FAILURE_TTL_MS),
+  })
+
+  while (translationCache.size > CITY_TRANSLATION_CACHE_MAX_SIZE)
+    translationCache.delete(translationCache.keys().next().value as string)
+}
+
+function isUsableTranslation(value: string | null, source: string): value is string {
+  if (!value)
+    return false
+
+  const translated = value.trim()
+  if (!translated || translated.toLocaleLowerCase() === source.toLocaleLowerCase())
+    return false
+
+  return isChineseText(translated)
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  if (typeof fetch !== 'function')
+    return null
+
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), CITY_TRANSLATION_TIMEOUT_MS)
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok)
+      return null
+    return await response.json()
+  }
+  catch {
+    return null
+  }
+  finally {
+    globalThis.clearTimeout(timeoutId)
+  }
+}
+
+function parseGoogleTranslation(payload: unknown): string | null {
+  if (!Array.isArray(payload) || !Array.isArray(payload[0]))
+    return null
+
+  const text = payload[0]
+    .map(part => Array.isArray(part) && typeof part[0] === 'string' ? part[0] : '')
+    .join('')
+    .trim()
+  return text || null
+}
+
+function parseMyMemoryTranslation(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object')
+    return null
+  const responseData = (payload as Record<string, unknown>).responseData
+  if (!responseData || typeof responseData !== 'object')
+    return null
+  const translatedText = (responseData as Record<string, unknown>).translatedText
+  return typeof translatedText === 'string' ? translatedText.trim() || null : null
+}
+
+async function requestAutomaticTranslation(city: string): Promise<string | null> {
+  const encodedCity = encodeURIComponent(city)
+  const translated = parseGoogleTranslation(await fetchJson(
+    `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodedCity}`,
+  ))
+  if (isUsableTranslation(translated, city))
+    return translated
+
+  // MyMemory is a secondary endpoint for browsers that block Google's host.
+  const fallback = parseMyMemoryTranslation(await fetchJson(
+    `https://api.mymemory.translated.net/get?q=${encodedCity}&langpair=en%7Czh-CN`,
+  ))
+  return isUsableTranslation(fallback, city) ? fallback : null
+}
+
+/**
+ * Return an already-localized city name synchronously when the geocoder has
+ * supplied Chinese text. English input intentionally returns an empty string;
+ * callers can then fall back to the original name while async localization is
+ * in progress.
+ */
 export function formatCityNameZh(city: string | null | undefined): string {
-  if (!city?.trim())
-    return ''
+  const trimmed = city?.trim() ?? ''
+  return trimmed && isChineseText(trimmed) ? trimmed : ''
+}
 
-  const trimmed = city.trim()
-  const mappedName = CITY_NAME_ZH_MAP[normalizeCityName(trimmed)]
-  if (mappedName)
-    return mappedName
+/**
+ * Translate an arbitrary city name without a hand-maintained city dictionary.
+ * Results are scoped to this page session and requests for the same city are
+ * deduplicated across the list, detail view, and earth markers.
+ */
+export async function translateCityNameZh(city: string | null | undefined): Promise<string | null> {
+  const trimmed = city?.trim() ?? ''
+  if (!trimmed)
+    return null
+  if (isChineseText(trimmed))
+    return trimmed
 
-  return CJK_UNIFIED_IDEOGRAPH_REGEX.test(trimmed) ? trimmed : ''
+  const key = normalizeTranslationKey(trimmed)
+  const cached = translationCache.get(key)
+  if (cached && cached.expiresAt > Date.now())
+    return cached.value
+  if (cached)
+    translationCache.delete(key)
+
+  const existing = translationInflight.get(key)
+  if (existing)
+    return existing
+
+  const task = requestAutomaticTranslation(trimmed)
+    .then((translated) => {
+      rememberTranslation(key, translated)
+      return translated
+    })
+    .catch(() => {
+      rememberTranslation(key, null)
+      return null
+    })
+    .finally(() => {
+      translationInflight.delete(key)
+    })
+
+  translationInflight.set(key, task)
+  return task
 }
