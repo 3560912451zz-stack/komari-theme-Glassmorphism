@@ -322,7 +322,7 @@ function buildNodeMetadataItems(node: NodeData): NodeMetadataItem[] {
       }
       case 'city': {
         const city = providerMetadata?.geo?.city
-        const cityName = formatCityNameZh(city) || city?.trim() || ''
+        const cityName = providerMetadata?.geo?.cityZh || formatCityNameZh(city) || city?.trim() || ''
         if (!cityName)
           break
 
