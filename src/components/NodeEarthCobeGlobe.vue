@@ -85,13 +85,13 @@ const {
   clusterKey,
 } = useNodeGeoClusters({ nodes: () => props.nodes })
 
-function markerId(nodeUuid: string): string {
-  return `node-${nodeUuid}`
+function markerId(clusterId: string): string {
+  return `location-${clusterId}`
 }
 
 const markers = computed<Marker[]>(() => {
   return regionClusters.value.map(cluster => ({
-    id: markerId(cluster.nodeUuid),
+    id: markerId(cluster.id),
     location: cluster.coord,
     size: 0,
   }))
@@ -381,7 +381,7 @@ function onPointerUp(e: PointerEvent) {
     >
       <img
         :src="`/images/flags/${label.code}.svg`" :alt="label.code"
-        class="block size-5 rounded-[0.18rem] shadow-[0_8px_20px_rgb(15_23_42/0.24)]"
+        class="block size-4 rounded-[0.14rem] shadow-[0_5px_12px_rgb(15_23_42/0.22)]"
       >
     </div>
 

@@ -13,7 +13,6 @@ interface UseNodeGeoClustersOptions {
 
 export interface RegionCluster {
   id: string
-  nodeUuid: string
   nodeName: string
   code: string
   coord: [number, number]
@@ -24,7 +23,7 @@ export interface RegionCluster {
   onlineServers: number
 }
 
-interface ClusterSummary {
+export interface ClusterSummary {
   clusters: RegionCluster[]
   totalServers: number
   onlineServers: number
@@ -33,12 +32,12 @@ interface ClusterSummary {
 const IP_GEO_LOOKUP_BATCH_SIZE = 8
 const IP_GEO_RETRY_INTERVAL_MS = 10 * 60 * 1000
 const UNKNOWN_COORD: [number, number] = [0, 0]
-const JITTER_BASE_DEGREES = 1.8
-const JITTER_STEP_DEGREES = 0.9
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
 const COUNTRY_CODE_REGEX = /^[A-Z]{2}$/
+const CITY_KEY_SEPARATOR_REGEX = /[._-]+/g
+const CITY_KEY_SPACES_REGEX = /\s+/g
 
 interface NodeClusterInfo {
+  locationId: string
   code: string
   coord: [number, number]
   label: string
@@ -48,6 +47,7 @@ interface NodeClusterInfo {
 
 interface ClusterCandidate {
   node: NodeData
+  nodeId: string
   info: NodeClusterInfo
 }
 
@@ -60,21 +60,90 @@ function coordinateGroupKey(coord: [number, number]): string {
   return `${coord[0].toFixed(2)}:${coord[1].toFixed(2)}`
 }
 
-function wrapLongitude(value: number): number {
-  return ((value + 180) % 360 + 360) % 360 - 180
+function normalizeCityKey(value: string | undefined): string | null {
+  const city = value
+    ?.normalize('NFKC')
+    .toLowerCase()
+    .replace(CITY_KEY_SEPARATOR_REGEX, ' ')
+    .replace(CITY_KEY_SPACES_REGEX, ' ')
+    .trim()
+  return city || null
 }
 
-function spreadCoordinate(coord: [number, number], index: number): [number, number] {
-  if (index === 0)
-    return coord
+function nodeClusterInfo(node: NodeData, nodeId: string, ipGeoMap: ReadonlyMap<string, IpGeo>): NodeClusterInfo {
+  const ip = node.ipv4 || node.ipv6
+  const geo = ip ? ipGeoMap.get(ip) : undefined
+  const regionAlias = getRegionByAlias(node.region)
+  const regionCode = getCountryCodeFromRegion(node.region) || regionAlias?.code || null
+  const code = normalizeCountryCode(regionCode) || 'UN'
 
-  const radius = JITTER_BASE_DEGREES + (Math.ceil(index / 6) - 1) * JITTER_STEP_DEGREES
-  const angle = (index - 1) * GOLDEN_ANGLE
-  const latitudeRadians = coord[0] * Math.PI / 180
-  const longitudeScale = Math.max(0.35, Math.cos(latitudeRadians))
-  const latitude = Math.min(89, Math.max(-89, coord[0] + Math.sin(angle) * radius))
-  const longitude = wrapLongitude(coord[1] + Math.cos(angle) * radius / longitudeScale)
-  return [latitude, longitude]
+  if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng)) {
+    const label = formatCityNameZh(geo.city) || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
+    const coord: [number, number] = [geo.lat, geo.lng]
+    const cityKey = normalizeCityKey(geo.city)
+    return {
+      locationId: cityKey ? `city:${code}:${cityKey}` : `coord:${code}:${coordinateGroupKey(coord)}`,
+      code,
+      coord,
+      label,
+      asn: geo.asn,
+      org: geo.org,
+    }
+  }
+
+  return {
+    locationId: `node:${nodeId}`,
+    code,
+    coord: getCoordByCode(code) ?? UNKNOWN_COORD,
+    label: getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location',
+  }
+}
+
+export function buildNodeGeoClusterSummary(nodes: NodeData[], ipGeoMap: ReadonlyMap<string, IpGeo>): ClusterSummary {
+  let onlineServers = 0
+  const candidates: ClusterCandidate[] = []
+
+  for (const [index, node] of nodes.entries()) {
+    if (node.online)
+      onlineServers += 1
+
+    const nodeId = node.uuid || `node-${index}`
+    const info = nodeClusterInfo(node, nodeId, ipGeoMap)
+    candidates.push({ node, nodeId, info })
+  }
+
+  const locationGroups = new Map<string, ClusterCandidate[]>()
+  for (const candidate of candidates) {
+    const group = locationGroups.get(candidate.info.locationId) ?? []
+    group.push(candidate)
+    locationGroups.set(candidate.info.locationId, group)
+  }
+
+  const clusters = Array.from(locationGroups, ([locationId, group]): RegionCluster => {
+    group.sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+    const representative = group[0]!
+    const representativeName = representative.node.name?.trim() || representative.nodeId
+    const locationName = representative.info.label
+    const asn = group.find(candidate => candidate.info.asn)?.info.asn
+    const org = group.find(candidate => candidate.info.org)?.info.org
+    return {
+      id: locationId,
+      nodeName: group.length > 1 ? `${locationName} (${group.length})` : representativeName,
+      code: representative.info.code,
+      coord: representative.info.coord,
+      label: locationName,
+      asn,
+      org,
+      servers: group.length,
+      onlineServers: group.filter(candidate => candidate.node.online).length,
+    }
+  })
+
+  return {
+    clusters,
+    totalServers: nodes.length,
+    onlineServers,
+  }
 }
 
 export function useNodeGeoClusters(options: UseNodeGeoClustersOptions = {}) {
@@ -154,81 +223,7 @@ export function useNodeGeoClusters(options: UseNodeGeoClustersOptions = {}) {
     }
   }
 
-  function nodeClusterInfo(node: NodeData): NodeClusterInfo {
-    const ip = node.ipv4 || node.ipv6
-    const geo = ip ? ipGeoMap.value.get(ip) : undefined
-    const regionAlias = getRegionByAlias(node.region)
-    const regionCode = getCountryCodeFromRegion(node.region) || regionAlias?.code || null
-    const code = normalizeCountryCode(regionCode) || 'UN'
-
-    if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng)) {
-      const label = formatCityNameZh(geo.city) || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
-      return {
-        code,
-        coord: [geo.lat, geo.lng],
-        label,
-        asn: geo.asn,
-        org: geo.org,
-      }
-    }
-
-    return {
-      code,
-      coord: getCoordByCode(code) ?? UNKNOWN_COORD,
-      label: getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location',
-    }
-  }
-
-  const clusterSummary = computed<ClusterSummary>(() => {
-    let onlineServers = 0
-    const candidates: ClusterCandidate[] = []
-
-    for (const node of displayNodes.value) {
-      if (node.online)
-        onlineServers += 1
-
-      const info = nodeClusterInfo(node)
-      candidates.push({ node, info })
-    }
-
-    const coordinateGroups = new Map<string, ClusterCandidate[]>()
-    for (const candidate of candidates) {
-      const key = coordinateGroupKey(candidate.info.coord)
-      const group = coordinateGroups.get(key) ?? []
-      group.push(candidate)
-      coordinateGroups.set(key, group)
-    }
-
-    const jitterByNode = new Map<string, [number, number]>()
-    for (const group of coordinateGroups.values()) {
-      group.sort((a, b) => a.node.uuid.localeCompare(b.node.uuid))
-      group.forEach((candidate, index) => {
-        jitterByNode.set(candidate.node.uuid, spreadCoordinate(candidate.info.coord, index))
-      })
-    }
-
-    const clusters = candidates.map((candidate, index): RegionCluster => {
-      const nodeId = candidate.node.uuid || `node-${index}`
-      return {
-        id: nodeId,
-        nodeUuid: nodeId,
-        nodeName: candidate.node.name?.trim() || nodeId,
-        code: candidate.info.code,
-        coord: jitterByNode.get(candidate.node.uuid) ?? candidate.info.coord,
-        label: candidate.info.label,
-        asn: candidate.info.asn,
-        org: candidate.info.org,
-        servers: 1,
-        onlineServers: candidate.node.online ? 1 : 0,
-      }
-    })
-
-    return {
-      clusters,
-      totalServers: displayNodes.value.length,
-      onlineServers,
-    }
-  })
+  const clusterSummary = computed<ClusterSummary>(() => buildNodeGeoClusterSummary(displayNodes.value, ipGeoMap.value))
 
   const regionClusters = computed<RegionCluster[]>(() => clusterSummary.value.clusters)
   const totalServers = computed(() => clusterSummary.value.totalServers)
@@ -236,7 +231,7 @@ export function useNodeGeoClusters(options: UseNodeGeoClustersOptions = {}) {
   const offlineServers = computed(() => totalServers.value - onlineServers.value)
 
   function clusterKey(cluster: RegionCluster) {
-    return `${cluster.id}:${cluster.nodeName}:${cluster.code}:${cluster.coord[0]},${cluster.coord[1]}:${cluster.label}:${cluster.asn ?? ''}:${cluster.org ?? ''}:${cluster.onlineServers}`
+    return `${cluster.id}:${cluster.nodeName}:${cluster.code}:${cluster.coord[0]},${cluster.coord[1]}:${cluster.label}:${cluster.asn ?? ''}:${cluster.org ?? ''}:${cluster.servers}:${cluster.onlineServers}`
   }
 
   const nodeIpSignature = computed(() => displayNodes.value

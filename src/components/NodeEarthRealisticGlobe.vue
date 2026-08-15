@@ -354,10 +354,10 @@ watch(shouldRender, (visible) => {
 .earth-globe-host :deep(.earth-label-flag) {
   position: relative;
   z-index: 2;
-  width: 1.2rem;
-  height: 1.2rem;
+  width: 0.9rem;
+  height: 0.9rem;
   display: block;
-  border-radius: 0.18rem;
-  box-shadow: 0 8px 20px rgb(15 23 42 / 24%);
+  border-radius: 0.14rem;
+  box-shadow: 0 5px 12px rgb(15 23 42 / 22%);
 }
 </style>

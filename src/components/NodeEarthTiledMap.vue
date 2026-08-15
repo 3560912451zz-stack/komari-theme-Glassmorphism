@@ -115,10 +115,10 @@ const clusterMarkers = computed<ClusterMarker[]>(() => regionClusters.value.map(
               <image
                 v-if="marker.code"
                 :href="`/images/flags/${marker.code}.svg`"
-                :x="marker.x - 13"
-                :y="marker.y - 34"
-                width="26"
-                height="26"
+                :x="marker.x - 9"
+                :y="marker.y - 25"
+                width="18"
+                height="18"
                 preserveAspectRatio="xMidYMid slice"
                 class="map-flag"
               />

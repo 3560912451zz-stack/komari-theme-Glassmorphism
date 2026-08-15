@@ -1,5 +1,16 @@
 # AI Cache / Agent Handoff Log
 
+## 2026-08-15 same-location flag aggregation (v3.3.8 release integration)
+
+- Goal: render one Earth flag for two or more current nodes resolved to the same country and city, while keeping different cities in the same country separate.
+- Scope: aggregate `useNodeGeoClusters` output, keep unresolved nodes independent, preserve node-based online/offline totals, update the fork release notes/version to v3.3.8, and validate all three Earth renderers.
+- Constraint: do not restore persistent IP geo caching and do not merge nodes only because they share a country fallback coordinate.
+- Result: resolved nodes now group by normalized `country + city`; resolved city-less nodes group only at the same rounded coordinate; unresolved nodes remain independent. Location clusters retain node/online counts, while global totals remain node-based.
+- Validation: deterministic checks returned 1 marker for two Los Angeles nodes, 2 for Los Angeles plus San Francisco, 2 for two unresolved US nodes, and 1 for two city-less nodes at the same coordinate. `bun run lint`, `bun run type-check`, `git diff --check`, and `bun run build-only --configLoader runner` passed.
+- Browser: local realistic-Earth preview rendered 8 cards, 8 flags, and one nonblank Three.js canvas at 1270x720 with no console warnings/errors. The packaged zip contains manifest v3.3.8 and exactly `komari-theme.json`, `preview.png`, and `dist/` at the top level.
+- Environment note: standard `bun run build` still fails only because the Windows sandbox denies Vite's default config-loader directory read; the documented runner loader completed the equivalent production build.
+- Release: publication to `3560912451zz-stack/komari-theme-Glassmorphism` is authorized. Integrate from remote v3.3.7, remove the three mistakenly uploaded root-level Earth component copies, keep the verified sources under `src/components/`, and verify both release workflows before handoff.
+
 > 这个文件给 AI 编程代理和二开维护者使用，用来保存任务计划、执行日志、验证结果、风险点和交接信息。它的目标是防止断网、会话丢失、上下文被压缩后无法继续工作。
 
 ## 使用规则
