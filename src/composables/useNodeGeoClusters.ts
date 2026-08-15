@@ -107,7 +107,7 @@ function nodeClusterInfo(node: NodeData, nodeId: string, ipGeoMap: ReadonlyMap<s
 
   if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng) && geoCountryMatchesRegion) {
     const city = geo.city?.trim()
-    const label = formatCityNameZh(city) || city || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
+    const label = geo.cityZh || formatCityNameZh(city) || city || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
     const coord: [number, number] = [geo.lat, geo.lng]
     const cityKey = normalizeCityKey(city)
     return {
