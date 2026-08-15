@@ -10,6 +10,9 @@ const CITY_TRANSLATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const CITY_TRANSLATION_FAILURE_TTL_MS = 5 * 60 * 1000
 const CITY_TRANSLATION_CACHE_MAX_SIZE = 512
 
+// Generic translators can turn proper place names into ordinary words.
+const PRESERVE_CITY_NAME_KEYS = new Set(['middle'])
+
 interface TranslationCacheEntry {
   value: string | null
   expiresAt: number
@@ -28,6 +31,10 @@ function normalizeTranslationKey(value: string): string {
     .replace(CITY_WHITESPACE_REGEX, ' ')
     .trim()
     .toLocaleLowerCase()
+}
+
+function shouldPreserveOriginalCityName(city: string): boolean {
+  return PRESERVE_CITY_NAME_KEYS.has(normalizeTranslationKey(city))
 }
 
 function rememberTranslation(key: string, value: string | null): void {
@@ -132,6 +139,8 @@ export async function translateCityNameZh(city: string | null | undefined): Prom
   const trimmed = city?.trim() ?? ''
   if (!trimmed)
     return null
+  if (shouldPreserveOriginalCityName(trimmed))
+    return trimmed
   if (isChineseText(trimmed))
     return trimmed
 
