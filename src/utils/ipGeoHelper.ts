@@ -1,9 +1,6 @@
 /**
- * 根据 IP 在线查询地理坐标与城市，用于地球的城市级定位。
- *
- * 多个免费 HTTPS 服务依次回退（ip.sb → ipinfo.io → ipwho.is → ipapi.co），任一返回经纬度即采用；
- * 结果按 IP 缓存到 localStorage（带版本与过期时间），避免重复请求与频率限制。
- * 全部失败时写入短期负缓存，调用方应回落到国家级定位。
+ * Resolve IP geolocation through a small provider fallback chain.
+ * Results stay in the active page session only; no persistent browser cache is used.
  */
 
 export interface IpGeo {
@@ -17,21 +14,10 @@ export interface IpGeo {
   asn?: string
 }
 
-const CACHE_PREFIX = 'komari-theme-emerald:ipgeo'
-const CACHE_VERSION = 3
-const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 天
-const NEGATIVE_CACHE_TTL_MS = 6 * 60 * 60 * 1000 // 6 小时
 const IP_GEO_TIMEOUT_MS = 5000
 const PROVIDER_BACKOFF_BASE_MS = 60 * 1000
 const PROVIDER_BACKOFF_MAX_MS = 30 * 60 * 1000
 const ASN_ORG_PREFIX_REGEX = /^AS\d+/
-
-interface CacheEntry {
-  version: number
-  updatedAt: number
-  geo: IpGeo | null
-  negative?: boolean
-}
 
 interface ProviderState {
   failures: number
@@ -45,61 +31,12 @@ interface ProviderEntry {
   lookup: Provider
 }
 
-function cacheKey(ip: string): string {
-  return `${CACHE_PREFIX}:${ip}`
-}
-
 function isValidGeo(geo: unknown): geo is IpGeo {
   if (!geo || typeof geo !== 'object')
     return false
   const g = geo as Record<string, unknown>
   return typeof g.lat === 'number' && Number.isFinite(g.lat) && g.lat >= -90 && g.lat <= 90
     && typeof g.lng === 'number' && Number.isFinite(g.lng) && g.lng >= -180 && g.lng <= 180
-}
-
-function readCache(ip: string): { geo: IpGeo | null, negative: boolean } | null {
-  if (typeof window === 'undefined')
-    return null
-  try {
-    const raw = window.localStorage.getItem(cacheKey(ip))
-    if (!raw)
-      return null
-    const parsed = JSON.parse(raw) as CacheEntry
-    if (parsed.version !== CACHE_VERSION)
-      return null
-
-    const ttl = parsed.negative ? NEGATIVE_CACHE_TTL_MS : CACHE_TTL_MS
-    if (Date.now() - parsed.updatedAt > ttl)
-      return null
-
-    if (parsed.negative)
-      return { geo: null, negative: true }
-    if (!isValidGeo(parsed.geo))
-      return null
-    return { geo: parsed.geo, negative: false }
-  }
-  catch {
-    return null
-  }
-}
-
-function writeCache(ip: string, geo: IpGeo): void {
-  writeCacheEntry(ip, { version: CACHE_VERSION, updatedAt: Date.now(), geo })
-}
-
-function writeNegativeCache(ip: string): void {
-  writeCacheEntry(ip, { version: CACHE_VERSION, updatedAt: Date.now(), geo: null, negative: true })
-}
-
-function writeCacheEntry(ip: string, entry: CacheEntry): void {
-  if (typeof window === 'undefined')
-    return
-  try {
-    window.localStorage.setItem(cacheKey(ip), JSON.stringify(entry))
-  }
-  catch {
-    // 忽略写盘失败（隐私模式 / 配额已满）
-  }
 }
 
 function toFinite(value: unknown): number | null {
@@ -129,7 +66,7 @@ async function fetchWithTimeout(url: string, timeoutMs = IP_GEO_TIMEOUT_MS): Pro
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { signal: controller.signal })
+    return await fetch(url, { signal: controller.signal, cache: 'no-store' })
   }
   finally {
     window.clearTimeout(timeoutId)
@@ -267,16 +204,12 @@ function markProviderFailure(id: string): void {
 const inflight = new Map<string, Promise<IpGeo | null>>()
 
 /**
- * 查询某个 IP 的地理坐标（含缓存与多服务回退）。失败返回 null。
+ * 查询某个 IP 的地理坐标（多服务回退）。失败返回 null。
  */
 export async function lookupIpGeo(ip: string): Promise<IpGeo | null> {
   const normalizedIp = ip.trim()
   if (!normalizedIp)
     return null
-
-  const cached = readCache(normalizedIp)
-  if (cached)
-    return cached.geo
 
   const existing = inflight.get(normalizedIp)
   if (existing)
@@ -289,7 +222,6 @@ export async function lookupIpGeo(ip: string): Promise<IpGeo | null> {
         const geo = await provider.lookup(normalizedIp)
         if (geo && isValidGeo(geo)) {
           markProviderSuccess(provider.id)
-          writeCache(normalizedIp, geo)
           return geo
         }
         markProviderFailure(provider.id)
@@ -298,7 +230,6 @@ export async function lookupIpGeo(ip: string): Promise<IpGeo | null> {
         markProviderFailure(provider.id)
       }
     }
-    writeNegativeCache(normalizedIp)
     return null
   })()
 
