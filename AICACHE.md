@@ -12,6 +12,16 @@
 
 ## 当前任务
 
+- 状态：done，按节点生成地球国旗并移除 IP 地理持久化缓存
+- 目标：让每个当前可见节点独立显示一面旗帜；删除节点后立即移除对应地球标记；不再保存 30 天 IP 地理结果
+- 范围：`useNodeGeoClusters`、三种地球渲染器、`ipGeoHelper`、README 与 Vite ESM 配置；保持 v3.3.5 Tab 沉浸动画不变
+- 验证结果：`bun run lint`、`vue-tsc --build` 通过；标准 `bun run build` 受 Windows 沙箱 esbuild 目录权限限制，使用 `vite build --configLoader runner` 成功构建并生成主题 zip；本地 mock 预览显示 8 个节点对应 8 面旗帜
+
+- 状态：done，fork README 已同步
+- 目标：让 README 与 `v3.3.5` fork 实际内容一致，更新版本、仓库链接、Tab 地球沉浸动画、总览卡片动画同步和本地假节点预览说明
+- 范围：仅文档与交接记录；不改 manifest 版本、不重新生成 Release 包、不向 upstream 提交
+- 验证结果：README 链接、版本号、代码围栏和 `<details>` 配对检查通过，`git diff --check` 通过；网页端已提交到 fork `main`
+
 - 状态：in-progress，v3.3.3 实现完成，正在执行最终验证与发布
 - 目标：统一 Komari `price = -1` 免费节点语义，移除“免费 / 周期”文案，并让单节点剩余价值显示“无 / N/A”。
 - 里程碑：M4 UI/UX + 小范围业务展示修复；金额计算继续返回数值，不把 `NaN` 作为业务状态。
@@ -41,6 +51,22 @@
 - 不做：不把 Glassmorphism 默认主题替换混入计费 PR #604；不发布测试构建为正式 Release；不构建 Windows 包。
 
 ## 执行日志
+
+### 2026-08-15 one-node-one-flag and geo cache removal
+
+- `useNodeGeoClusters` now creates one `RegionCluster` per current node UUID, includes an `UN` fallback flag/coordinate, and applies deterministic small coordinate spreading when nodes share a location.
+- Country flags come only from the node's configured `region`; IP geolocation supplies city/coordinate metadata and never overrides the flag.
+- Realistic, Cobe, and tiled renderers now receive unique node IDs; tiled legend entries show node names. Active IP state is pruned and late geo responses are ignored after node removal.
+- Removed localStorage success/negative IP geo caches and 30-day TTL; requests use `cache: no-store` while retaining in-flight dedupe and provider backoff.
+- Updated README behavior notes and made Vite's project-root resolution ESM-safe for runner-based validation.
+
+### 2026-08-11 fork README sync completion
+
+- 本地文档提交：`96e4ccd`（`docs: sync fork README with v3.3.5`），包含 README 与本地交接记录更新。
+- Git Credential Manager 的 Windows 凭据存储在本机失败，未读取或保存任何 token；因此没有使用命令行凭据绕过登录。
+- 使用已登录的 GitHub 网页端仅上传并直接提交 `README.md` 到个人 fork `main`，远端提交为 `52d88f1e65a6f67b80d72ab2924a034a3ac63368`。
+- 远端核对使用本机代理 `socks5h://127.0.0.1:10808`；确认 `origin/main` 指向上述提交，未向 `upstream` 推送。
+- README 当前包含 fork 链接、v3.3.4 Tab 地球沉浸切换、v3.3.5 总览卡片动画同步、国旗/IP 地理解析缓存和 `VITE_MOCK_NODES=true` 本地预览说明。
 
 ### 2026-07-30 v3.3.3 Issue #37 free-node semantics
 
