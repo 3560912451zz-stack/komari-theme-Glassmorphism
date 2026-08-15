@@ -155,15 +155,16 @@ const locationDisplay = computed(() => {
 
   const geo = providerMetadata.value?.geo
   const city = geo?.city?.trim()
-  const cityName = formatCityNameZh(city) || city
+  const cityName = geo?.cityZh || formatCityNameZh(city) || city
   const countryName = getRegionDisplayName(node.region) || getRegionDisplayName(geo?.countryCode ?? '') || geo?.countryCode?.trim().toUpperCase()
 
   return [cityName, countryName].filter(Boolean).join(' · ')
 })
 const providerDisplay = computed(() => {
   const parts: string[] = []
-  const city = providerMetadata.value?.geo?.city?.trim()
-  const cityName = formatCityNameZh(city) || city
+  const geo = providerMetadata.value?.geo
+  const city = geo?.city?.trim()
+  const cityName = geo?.cityZh || formatCityNameZh(city) || city
   if (cityName)
     parts.push(cityName)
   if (providerMetadata.value?.provider?.displayName)
