@@ -1,10 +1,10 @@
 import type { NodeData } from '@/stores/nodes'
 import type { IpGeo } from '@/utils/ipGeoHelper'
 import { computed, ref, watch } from 'vue'
+import { lookupNodeGeo } from '@/services/provider.service'
 import { useNodesStore } from '@/stores/nodes'
 import { formatCityNameZh } from '@/utils/cityNameHelper'
 import { getCoordByCode, getCountryCodeFromRegion } from '@/utils/geoHelper'
-import { lookupIpGeo } from '@/utils/ipGeoHelper'
 import { getRegionByAlias, getRegionDisplayName } from '@/utils/regionHelper'
 
 interface UseNodeGeoClustersOptions {
@@ -35,6 +35,7 @@ const UNKNOWN_COORD: [number, number] = [0, 0]
 const COUNTRY_CODE_REGEX = /^[A-Z]{2}$/
 const CITY_KEY_SEPARATOR_REGEX = /[._-]+/g
 const CITY_KEY_SPACES_REGEX = /\s+/g
+const CITY_DIACRITIC_REGEX = /\p{Mark}/gu
 
 interface NodeClusterInfo {
   locationId: string
@@ -53,7 +54,30 @@ interface ClusterCandidate {
 
 function normalizeCountryCode(value: string | undefined | null): string | null {
   const code = value?.trim().toUpperCase()
-  return code && COUNTRY_CODE_REGEX.test(code) ? code : null
+  if (!code || !COUNTRY_CODE_REGEX.test(code))
+    return null
+
+  return getRegionByAlias(code)?.code || (getCoordByCode(code) ? code : null)
+}
+
+function regionKey(region: string | undefined | null): string {
+  const alias = getRegionByAlias(region ?? '')
+  const code = normalizeCountryCode(getCountryCodeFromRegion(region) || alias?.code)
+  return code || region?.trim().toLowerCase() || 'unknown'
+}
+
+function preferredNodeIp(node: NodeData): string | null {
+  return node.ipv4?.trim() || node.ipv6?.trim() || null
+}
+
+function nodeGeoKey(node: NodeData, ip: string): string {
+  return JSON.stringify([
+    node.uuid,
+    node.ipv4?.trim() || '',
+    node.ipv6?.trim() || '',
+    ip.trim(),
+    regionKey(node.region),
+  ])
 }
 
 function coordinateGroupKey(coord: [number, number]): string {
@@ -62,7 +86,8 @@ function coordinateGroupKey(coord: [number, number]): string {
 
 function normalizeCityKey(value: string | undefined): string | null {
   const city = value
-    ?.normalize('NFKC')
+    ?.normalize('NFKD')
+    .replace(CITY_DIACRITIC_REGEX, '')
     .toLowerCase()
     .replace(CITY_KEY_SEPARATOR_REGEX, ' ')
     .replace(CITY_KEY_SPACES_REGEX, ' ')
@@ -71,16 +96,20 @@ function normalizeCityKey(value: string | undefined): string | null {
 }
 
 function nodeClusterInfo(node: NodeData, nodeId: string, ipGeoMap: ReadonlyMap<string, IpGeo>): NodeClusterInfo {
-  const ip = node.ipv4 || node.ipv6
-  const geo = ip ? ipGeoMap.get(ip) : undefined
+  const ip = preferredNodeIp(node)
+  const geo = ip ? ipGeoMap.get(nodeGeoKey(node, ip)) : undefined
   const regionAlias = getRegionByAlias(node.region)
   const regionCode = getCountryCodeFromRegion(node.region) || regionAlias?.code || null
-  const code = normalizeCountryCode(regionCode) || 'UN'
+  const configuredCode = normalizeCountryCode(regionCode)
+  const geoCode = normalizeCountryCode(geo?.countryCode)
+  const code = configuredCode || geoCode || 'UN'
+  const geoCountryMatchesRegion = !configuredCode || !geoCode || configuredCode === geoCode
 
-  if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng)) {
-    const label = formatCityNameZh(geo.city) || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
+  if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng) && geoCountryMatchesRegion) {
+    const city = geo.city?.trim()
+    const label = formatCityNameZh(city) || city || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
     const coord: [number, number] = [geo.lat, geo.lng]
-    const cityKey = normalizeCityKey(geo.city)
+    const cityKey = normalizeCityKey(city)
     return {
       locationId: cityKey ? `city:${code}:${cityKey}` : `coord:${code}:${coordinateGroupKey(coord)}`,
       code,
@@ -154,70 +183,75 @@ export function useNodeGeoClusters(options: UseNodeGeoClustersOptions = {}) {
   const failedIpAttempts = new Map<string, number>()
   let resolveGeneration = 0
 
-  function activeIpSet(nodes: NodeData[]): Set<string> {
-    return new Set(nodes
-      .map(node => node.ipv4 || node.ipv6 || '')
-      .filter(Boolean))
+  function activeNodeGeoKeys(nodes: NodeData[]): Set<string> {
+    return new Set(nodes.flatMap((node) => {
+      const ip = preferredNodeIp(node)
+      return ip ? [nodeGeoKey(node, ip)] : []
+    }))
   }
 
   function pruneGeoState(nodes: NodeData[]): void {
-    const activeIps = activeIpSet(nodes)
-    const next = new Map([...ipGeoMap.value].filter(([ip]) => activeIps.has(ip)))
+    const activeKeys = activeNodeGeoKeys(nodes)
+    const next = new Map([...ipGeoMap.value].filter(([key]) => activeKeys.has(key)))
     if (next.size !== ipGeoMap.value.size)
       ipGeoMap.value = next
 
-    for (const ip of failedIpAttempts.keys()) {
-      if (!activeIps.has(ip))
-        failedIpAttempts.delete(ip)
+    for (const key of failedIpAttempts.keys()) {
+      if (!activeKeys.has(key))
+        failedIpAttempts.delete(key)
     }
   }
 
   async function resolveNodeCities(nodes: NodeData[], generation: number): Promise<void> {
-    const ips: string[] = []
-    const seenIps = new Set<string>()
+    const targets: Array<{ key: string, node: NodeData }> = []
+    const seenKeys = new Set<string>()
     const now = Date.now()
 
     for (const node of nodes) {
-      const ip = node.ipv4 || node.ipv6
-      if (!ip || seenIps.has(ip) || ipGeoMap.value.has(ip))
+      const ip = preferredNodeIp(node)
+      if (!ip)
         continue
 
-      const failedAt = failedIpAttempts.get(ip)
+      const key = nodeGeoKey(node, ip)
+      if (seenKeys.has(key) || ipGeoMap.value.has(key))
+        continue
+
+      const failedAt = failedIpAttempts.get(key)
       if (failedAt && now - failedAt < IP_GEO_RETRY_INTERVAL_MS)
         continue
 
-      seenIps.add(ip)
-      ips.push(ip)
+      seenKeys.add(key)
+      targets.push({ key, node: { ...node, ipv4: node.ipv4?.trim(), ipv6: node.ipv6?.trim() } as NodeData })
     }
 
-    for (let i = 0; i < ips.length; i += IP_GEO_LOOKUP_BATCH_SIZE) {
-      const batch = ips.slice(i, i + IP_GEO_LOOKUP_BATCH_SIZE)
-      const results = await Promise.all(batch.map(async (ip) => {
-        const geo = await lookupIpGeo(ip)
-        return { ip, geo }
+    for (let i = 0; i < targets.length; i += IP_GEO_LOOKUP_BATCH_SIZE) {
+      const batch = targets.slice(i, i + IP_GEO_LOOKUP_BATCH_SIZE)
+      const results = await Promise.all(batch.map(async ({ key, node }) => {
+        const geo = await lookupNodeGeo(node)
+        return { key, geo }
       }))
 
       if (generation !== resolveGeneration)
         return
 
-      const activeIps = activeIpSet(displayNodes.value)
-      const resolved = results.filter((result): result is { ip: string, geo: IpGeo } => result.geo !== null && activeIps.has(result.ip))
+      const activeKeys = activeNodeGeoKeys(displayNodes.value)
+      const resolved = results.filter((result): result is { key: string, geo: IpGeo } => result.geo !== null && activeKeys.has(result.key))
 
-      for (const { ip, geo } of results) {
-        if (!activeIps.has(ip))
+      for (const { key, geo } of results) {
+        if (!activeKeys.has(key))
           continue
         if (geo)
-          failedIpAttempts.delete(ip)
+          failedIpAttempts.delete(key)
         else
-          failedIpAttempts.set(ip, Date.now())
+          failedIpAttempts.set(key, Date.now())
       }
 
       if (!resolved.length)
         continue
 
       const next = new Map(ipGeoMap.value)
-      for (const { ip, geo } of resolved) {
-        next.set(ip, geo)
+      for (const { key, geo } of resolved) {
+        next.set(key, geo)
       }
       ipGeoMap.value = next
     }
@@ -235,7 +269,7 @@ export function useNodeGeoClusters(options: UseNodeGeoClustersOptions = {}) {
   }
 
   const nodeIpSignature = computed(() => displayNodes.value
-    .map(node => `${node.uuid}:${node.ipv4 || node.ipv6 || ''}`)
+    .map(node => `${node.uuid}:${node.ipv4 || ''}:${node.ipv6 || ''}:${regionKey(node.region)}`)
     .join('|'))
 
   watch(nodeIpSignature, () => {

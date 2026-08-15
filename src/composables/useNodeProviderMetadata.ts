@@ -40,9 +40,12 @@ function notifySharedEntry(entry: SharedCacheEntry): void {
     subscriber(entry.metadata)
 }
 
-function releaseSharedMetadataEntry(entry: SharedCacheEntry, subscriber: (metadata: NodeProviderMetadata) => void): void {
+function releaseSharedMetadataEntry(fingerprint: string, entry: SharedCacheEntry, subscriber: (metadata: NodeProviderMetadata) => void): void {
   entry.subscribers.delete(subscriber)
-  sharedMetadataCache.sweep()
+  if (entry.subscribers.size === 0 && entry.promise === null)
+    sharedMetadataCache.delete(fingerprint)
+  else
+    sharedMetadataCache.sweep()
 }
 
 function getSharedMetadataEntry(node: NodeData, customAliases: string, allowGeoLookup: boolean): { fingerprint: string, entry: SharedCacheEntry } {
@@ -51,27 +54,34 @@ function getSharedMetadataEntry(node: NodeData, customAliases: string, allowGeoL
   if (cached)
     return { fingerprint, entry: cached }
 
-  const hasIps = allowGeoLookup && getNodeIps(node).length > 0
+  // Geo resolution is asynchronous; freeze the lookup identity so a live node
+  // update cannot pair an old IP result with newly-mutated node metadata.
+  const nodeSnapshot = { ...node, ipv4: node.ipv4?.trim(), ipv6: node.ipv6?.trim() } as NodeData
+
+  const hasIps = allowGeoLookup && getNodeIps(nodeSnapshot).length > 0
   const entry: SharedCacheEntry = {
-    metadata: buildRawNodeProviderMetadata(node, customAliases, null, hasIps),
+    metadata: buildRawNodeProviderMetadata(nodeSnapshot, customAliases, null, hasIps),
     subscribers: new Set(),
     promise: null,
   }
   sharedMetadataCache.set(fingerprint, entry)
 
   if (hasIps) {
-    entry.promise = lookupNodeGeo(node)
+    entry.promise = lookupNodeGeo(nodeSnapshot)
       .then((geo) => {
-        entry.metadata = buildRawNodeProviderMetadata(node, customAliases, geo, false)
+        entry.metadata = buildRawNodeProviderMetadata(nodeSnapshot, customAliases, geo, false)
         notifySharedEntry(entry)
       })
       .catch(() => {
-        entry.metadata = buildRawNodeProviderMetadata(node, customAliases, null, false)
+        entry.metadata = buildRawNodeProviderMetadata(nodeSnapshot, customAliases, null, false)
         notifySharedEntry(entry)
       })
       .finally(() => {
         entry.promise = null
-        sharedMetadataCache.sweep()
+        if (entry.subscribers.size === 0)
+          sharedMetadataCache.delete(fingerprint)
+        else
+          sharedMetadataCache.sweep()
       })
   }
 
@@ -151,7 +161,7 @@ export function useNodeProviderMetadata(options: UseNodeProviderMetadataOptions)
           }
         }
         entry.subscribers.add(subscriber)
-        unsubscribers.push(() => releaseSharedMetadataEntry(entry, subscriber))
+        unsubscribers.push(() => releaseSharedMetadataEntry(fingerprint, entry, subscriber))
       }
 
       metadataByUuid.value = nextMetadata
