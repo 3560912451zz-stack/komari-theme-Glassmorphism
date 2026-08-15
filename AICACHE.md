@@ -1,5 +1,12 @@
 # AI Cache / Agent Handoff Log
 
+## 2026-08-16 v3.3.10 地球旗帜与会话地理状态修复
+
+- `useNodeGeoClusters` 继续以节点 `region` 作为旗帜真源；仅当 IP 地理返回的国家与节点地区一致（或服务商未返回国家）时采用城市坐标，冲突时回退到地区中心坐标，避免 `KP` 等旗帜落在美国等错误位置。
+- 地理结果与失败重试记录改为按节点 UUID、当前 IP、地区组成的复合键保存；节点删除、换 IP、换地区或异步请求过期时都会清理/丢弃旧结果。
+- 城市中文词典增加常见别名和重音归一化；详情页、列表和地球标记在未命中词典时保留服务商原始城市名。
+- 版本更新为 `3.3.10`，待只向个人 fork 推送并验证 Release On Version Bump / Visual Regression。
+
 ## 2026-08-15 same-location flag aggregation (v3.3.8 release integration)
 
 - Goal: render one Earth flag for two or more current nodes resolved to the same country and city, while keeping different cities in the same country separate.
