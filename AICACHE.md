@@ -1,5 +1,15 @@
 # AI Cache / Agent Handoff Log
 
+## 2026-08-16 upstream v3.3.6 card fix integration (M6)
+
+- Goal: adopt the upstream fix that makes tiled-earth summary cards respect the same custom card order as the other home layouts, and add maintainability checks.
+- Scope: `src/components/NodeGeneralCards.vue`, visual fixture/test coverage, and `.github/workflows/quality.yml`; no earth animation, geo, flag, translation, or release-version changes.
+- Implemented: removed the tiled-only fixed card list, exposed `data-general-card-key` for semantic assertions, added configurable fixture card keys, and added a tiled custom-card count/order regression test.
+- Implemented: quality workflow runs frozen Bun install, lint, lint-diff verification, and build on pull requests, `main` pushes, and manual dispatch.
+- Validation: `bun run lint`, `bun run type-check`, `bun run build`, `git diff --check`, and five focused Playwright production-preview tests passed (tiled screenshot, tiled custom order, Tab/Escape toggle, renderer continuity, tiled aspect ratio).
+- Environment note: the repository's default Playwright Vite web server is blocked by the Windows sandbox's parent-directory read restriction; validation used a minimal preview config with Vite's runner loader and the existing production `dist/` output.
+- Pending: commit the changes and upload the same four tracked paths plus the workflow to the personal fork through the authenticated GitHub web flow; do not push to upstream.
+
 ## 2026-08-16 v3.3.10 地球旗帜与会话地理状态修复
 
 - `useNodeGeoClusters` 继续以节点 `region` 作为旗帜真源；仅当 IP 地理返回的国家与节点地区一致（或服务商未返回国家）时采用城市坐标，冲突时回退到地区中心坐标，避免 `KP` 等旗帜落在美国等错误位置。
