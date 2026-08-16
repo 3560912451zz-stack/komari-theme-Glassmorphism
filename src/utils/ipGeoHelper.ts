@@ -17,6 +17,82 @@ export interface IpGeo {
   asn?: string
 }
 
+const IPV4_OCTET_REGEX = /^\d{1,3}$/
+const IPV6_BRACKET_REGEX = /^\[|\]$/g
+const IPV6_MAPPED_IPV4_REGEX = /^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/
+
+function parseIpv4(value: string): [number, number, number, number] | null {
+  const parts = value.split('.')
+  if (parts.length !== 4 || parts.some(part => !IPV4_OCTET_REGEX.test(part)))
+    return null
+
+  const octets = parts.map(Number)
+  return octets.every(octet => octet >= 0 && octet <= 255)
+    ? octets as [number, number, number, number]
+    : null
+}
+
+function isReservedIpv4(value: string): boolean {
+  const octets = parseIpv4(value)
+  if (!octets)
+    return false
+
+  const [first, second, third, fourth] = octets
+  return first === 0
+    || first === 10
+    || (first === 100 && second >= 64 && second <= 127)
+    || first === 127
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 0 && third === 0)
+    || (first === 192 && second === 0 && third === 2)
+    || (first === 192 && second === 88 && third === 99)
+    || (first === 192 && second === 168)
+    || (first === 198 && second >= 18 && second <= 19)
+    || (first === 198 && second === 51 && third === 100)
+    || (first === 203 && second === 0 && third === 113)
+    || first >= 224
+    || (first === 255 && second === 255 && third === 255 && fourth === 255)
+}
+
+function isReservedIpv6(value: string): boolean {
+  const normalized = value.toLowerCase().replace(IPV6_BRACKET_REGEX, '').split('%', 1)[0] ?? ''
+  if (!normalized.includes(':'))
+    return false
+
+  const mappedIpv4 = normalized.match(IPV6_MAPPED_IPV4_REGEX)
+  if (mappedIpv4)
+    return isReservedIpv4(mappedIpv4[1]!)
+
+  if (normalized === '::' || normalized === '::1')
+    return true
+
+  const firstHextet = Number.parseInt(normalized.split(':')[0] || '0', 16)
+  if (!Number.isFinite(firstHextet))
+    return false
+
+  return (firstHextet & 0xFE00) === 0xFC00 // Unique local (fc00::/7)
+    || (firstHextet & 0xFFC0) === 0xFE80 // Link-local (fe80::/10)
+    || (firstHextet & 0xFF00) === 0xFF00 // Multicast (ff00::/8)
+    || (firstHextet === 0x2001 && normalized.startsWith('2001:db8:')) // Documentation range
+}
+
+/** Return false for IP literals that must never be sent to a geo provider. */
+export function isPublicIp(value: string): boolean {
+  const normalized = value.trim()
+  if (!normalized)
+    return false
+
+  if (parseIpv4(normalized))
+    return !isReservedIpv4(normalized)
+
+  if (normalized.includes(':'))
+    return !isReservedIpv6(normalized)
+
+  // Preserve existing support for DNS names; only reject recognized IP literals.
+  return true
+}
+
 const IP_GEO_TIMEOUT_MS = 5000
 const PROVIDER_BACKOFF_BASE_MS = 60 * 1000
 const PROVIDER_BACKOFF_MAX_MS = 30 * 60 * 1000
