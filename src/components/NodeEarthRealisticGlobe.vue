@@ -376,7 +376,10 @@ watch(shouldRender, (visible) => {
 
 <style scoped>
 .earth-globe-host {
-  contain: layout paint;
+  contain: layout;
+  overflow: hidden;
+  border-radius: 50%;
+  clip-path: circle(50% at 50% 50%);
   background: transparent;
 }
 
