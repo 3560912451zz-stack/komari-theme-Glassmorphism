@@ -114,8 +114,11 @@ function isValidGeo(geo: unknown): geo is IpGeo {
   if (!geo || typeof geo !== 'object')
     return false
   const g = geo as Record<string, unknown>
-  return typeof g.lat === 'number' && Number.isFinite(g.lat) && g.lat >= -90 && g.lat <= 90
-    && typeof g.lng === 'number' && Number.isFinite(g.lng) && g.lng >= -180 && g.lng <= 180
+  const hasValidLatitude = typeof g.lat === 'number' && Number.isFinite(g.lat) && g.lat >= -90 && g.lat <= 90
+  const hasValidLongitude = typeof g.lng === 'number' && Number.isFinite(g.lng) && g.lng >= -180 && g.lng <= 180
+  // Several providers use Null Island (0, 0) as an "unknown" placeholder.
+  // Treat it as a failed lookup so a configured country can use its fallback coordinate.
+  return hasValidLatitude && hasValidLongitude && (g.lat !== 0 || g.lng !== 0)
 }
 
 function toFinite(value: unknown): number | null {
