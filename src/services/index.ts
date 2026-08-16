@@ -1,6 +1,7 @@
 export * from './audit.service'
 export * from './auth.service'
 export * from './cache.service'
+export * from './cityTranslation.service'
 export * from './history.service'
 export * from './metrics.service'
 export * from './prediction.service'

@@ -1,6 +1,7 @@
 import type { NodeData } from '@/stores/nodes'
 import type { IpGeo } from '@/utils/ipGeoHelper'
 import type { ProviderResolveResult } from '@/utils/providerInfo'
+import { translateCityNameWithServerCache } from '@/services/cityTranslation.service'
 import { getCountryCodeFromRegion } from '@/utils/geoHelper'
 import { isPublicIp, lookupIpGeo } from '@/utils/ipGeoHelper'
 import { resolveProviderInfo } from '@/utils/providerInfo'
@@ -48,8 +49,10 @@ export async function lookupNodeGeo(node: NodeData): Promise<IpGeo | null> {
     const geoCode = getCountryCodeFromRegion(geo?.countryCode)
     // A configured region is authoritative.  Do not pair its flag with a
     // provider coordinate that has no reliable country code.
-    if (geo && (!configuredCode || geoCode === configuredCode))
-      return geo
+    if (geo && (!configuredCode || geoCode === configuredCode)) {
+      const cityZh = await translateCityNameWithServerCache(geo.city, geo.countryCode || configuredCode)
+      return cityZh ? { ...geo, cityZh } : geo
+    }
   }
   return null
 }
