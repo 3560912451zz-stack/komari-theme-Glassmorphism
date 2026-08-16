@@ -48,6 +48,11 @@ async function openInteractiveHome(page: Page): Promise<Locator> {
       return effect?.target !== element || !['pending', 'running'].includes(animation.playState)
     }))
   })).toBe(true)
+
+  await expect.poll(() => page.evaluate(() => ({
+    body: getComputedStyle(document.body).scrollbarWidth,
+    html: getComputedStyle(document.documentElement).scrollbarWidth,
+  }))).toEqual({ body: 'none', html: 'none' })
   return earthStage
 }
 
@@ -388,13 +393,43 @@ test('immersive earth keeps renderer pixels continuous across the exit handoff',
   const earthStage = await openInteractiveHome(page)
   const earthMotionFrame = page.getByTestId('earth-motion-frame')
 
+  async function expectCircularEarthWindow(): Promise<void> {
+    await expect.poll(() => earthMotionFrame.evaluate((frame) => {
+      const host = frame.querySelector<HTMLElement>('.earth-globe-host')
+      if (!host)
+        return null
+
+      const rect = host.getBoundingClientRect()
+      const style = getComputedStyle(host)
+      const centerTarget = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      const cornerTarget = document.elementFromPoint(rect.left + 2, rect.top + 2)
+      return {
+        borderRadius: style.borderRadius,
+        centerHitsEarth: centerTarget instanceof Node && host.contains(centerTarget),
+        clipPath: style.clipPath,
+        cornerHitsEarth: cornerTarget instanceof Node && host.contains(cornerTarget),
+        overflow: style.overflow,
+      }
+    })).toEqual({
+      borderRadius: '50%',
+      centerHitsEarth: true,
+      clipPath: 'circle(50% at 50% 50%)',
+      cornerHitsEarth: false,
+      overflow: 'hidden',
+    })
+  }
+
+  await expectCircularEarthWindow()
+
   interface EarthExitSample {
+    bodyClientWidth: number
     canvasBackingHeight: number
     canvasBackingWidth: number
     canvasHeight: number
     canvasLeft: number
     canvasTop: number
     canvasWidth: number
+    documentClientWidth: number
     flagHeight: number
     flagWidth: number
     frameHeight: number
@@ -438,12 +473,14 @@ test('immersive earth keeps renderer pixels continuous across the exit handoff',
         const placeholderRect = placeholder?.getBoundingClientRect()
         const state = stage.dataset.state ?? ''
         samples.push({
+          bodyClientWidth: document.body.clientWidth,
           canvasBackingHeight: canvas?.height ?? 0,
           canvasBackingWidth: canvas?.width ?? 0,
           canvasHeight: canvasRect?.height ?? 0,
           canvasLeft: canvasRect?.left ?? 0,
           canvasTop: canvasRect?.top ?? 0,
           canvasWidth: canvasRect?.width ?? 0,
+          documentClientWidth: document.documentElement.clientWidth,
           flagHeight: flagRect?.height ?? 0,
           flagWidth: flagRect?.width ?? 0,
           frameHeight: frameRect.height,
@@ -498,6 +535,15 @@ test('immersive earth keeps renderer pixels continuous across the exit handoff',
     expect(Math.max(...samples.map(sample => Math.abs(sample.canvasWidth - sample.hostWidth)))).toBeLessThanOrEqual(1)
     expect(Math.max(...samples.map(sample => Math.abs(sample.canvasHeight - sample.hostHeight)))).toBeLessThanOrEqual(1)
 
+    // The circular clip lives inside the FLIP frame, so a non-uniform frame
+    // scale would turn it into an ellipse during the handoff.
+    expect(Math.max(...samples.map(sample => Math.abs(sample.hostWidth - sample.hostHeight)))).toBeLessThanOrEqual(1)
+
+    // Hiding the root scrollbar must keep the layout viewport stable while
+    // document scrolling is locked and restored.
+    expect(new Set(samples.map(sample => sample.documentClientWidth)).size).toBe(1)
+    expect(new Set(samples.map(sample => sample.bodyClientWidth)).size).toBe(1)
+
     // Teleport must preserve the already-rendered endpoint, including fixed-
     // pixel HTML labels layered over the WebGL canvas.
     expect(Math.abs((beforeTeleport?.frameLeft ?? 0) - (firstInline?.frameLeft ?? 0))).toBeLessThanOrEqual(1)
@@ -526,6 +572,7 @@ test('immersive earth keeps renderer pixels continuous across the exit handoff',
   await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
   await expect(earthMotionFrame).toBeVisible()
   await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+  await expectCircularEarthWindow()
 
   await captureExit('Tab')
   await expect(earthStage).toHaveAttribute('data-state', 'inline')
@@ -534,6 +581,7 @@ test('immersive earth keeps renderer pixels continuous across the exit handoff',
   await page.keyboard.press('Tab')
   await expect(earthStage).toHaveAttribute('data-state', 'fullscreen')
   await expect.poll(() => hasRunningEarthFrameMotion(earthMotionFrame)).toBe(false)
+  await expectCircularEarthWindow()
   await captureExit('Escape')
 })
 
