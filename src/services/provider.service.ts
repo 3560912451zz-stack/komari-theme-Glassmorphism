@@ -2,7 +2,7 @@ import type { NodeData } from '@/stores/nodes'
 import type { IpGeo } from '@/utils/ipGeoHelper'
 import type { ProviderResolveResult } from '@/utils/providerInfo'
 import { getCountryCodeFromRegion } from '@/utils/geoHelper'
-import { lookupIpGeo } from '@/utils/ipGeoHelper'
+import { isPublicIp, lookupIpGeo } from '@/utils/ipGeoHelper'
 import { resolveProviderInfo } from '@/utils/providerInfo'
 
 export interface NodeProviderMetadata {
@@ -14,7 +14,9 @@ export interface NodeProviderMetadata {
 const FINGERPRINT_SEPARATOR = ''
 
 export function getNodeIps(node: NodeData): string[] {
-  return [node.ipv4, node.ipv6].filter((ip): ip is string => Boolean(ip?.trim()))
+  return [node.ipv4, node.ipv6]
+    .map(ip => ip?.trim())
+    .filter((ip): ip is string => typeof ip === 'string' && isPublicIp(ip))
 }
 
 export function getProviderMetadataText(node: NodeData): string {
@@ -44,7 +46,9 @@ export async function lookupNodeGeo(node: NodeData): Promise<IpGeo | null> {
   for (const ip of getNodeIps(node)) {
     const geo = await lookupIpGeo(ip)
     const geoCode = getCountryCodeFromRegion(geo?.countryCode)
-    if (geo && (!configuredCode || !geoCode || configuredCode === geoCode))
+    // A configured region is authoritative.  Do not pair its flag with a
+    // provider coordinate that has no reliable country code.
+    if (geo && (!configuredCode || geoCode === configuredCode))
       return geo
   }
   return null
