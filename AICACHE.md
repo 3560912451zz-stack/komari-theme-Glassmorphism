@@ -1,5 +1,13 @@
 # AI Cache / Agent Handoff Log
 
+## 2026-08-16 v3.3.14 server-backed city translation cache
+
+- Goal: persist reusable city Chinese names on the Komari server so an administrator translates each new city once and visitors reuse the result; keep node deletion from leaving stale flags and merge `Pyongyang` / `平壤` into one location cluster.
+- Implemented: added the `cityTranslationCache` managed setting, country-aware cache parsing/serialization (512-entry cap), admin-only debounced persistence with fresh-settings merge and read-back verification, and raw-geography/provider-layer localization.
+- Implemented: `POST /api/admin/theme/settings` success responses without a `data` field are accepted; public GET verification uses `cache: no-store`.
+- Validation: `bun run type-check`, targeted ESLint, full ESLint with `.tmp-komari-core` ignored, `bun run build`, manifest JSON parsing, `git diff --check`, cache merge/serialization smoke, server read/merge/write/verify smoke, and the Pyongyang cluster smoke all pass. The production build emits only the existing large globe chunk warning and creates the release zip.
+- Remaining release work: browser verification against the signed-in Komari instance, commit, and upload only to the personal fork as v3.3.14.
+
 ## 2026-08-16 admin-only Antarctica marker consistency (M3/M6)
 
 - Goal: keep a configured `AQ` flag paired with an Antarctic coordinate when administrators expose hidden nodes; visitors must keep their existing public-node behavior.
@@ -47,6 +55,11 @@
 - 如果记录过期，直接标注“已完成/已废弃”，不要让后续 AI 误判。
 
 ## 当前任务
+
+- 状态：in-progress，v3.3.14 城市中文译名服务器缓存正在验证
+- 目标：管理员首次遇到新城市时自动翻译并写入 Komari 主题设置；访客和后续页面直接复用；不保存 IP/节点/坐标，不让删除节点留下旗帜
+- 范围：`cityNameHelper`、城市翻译服务、provider geo enrichment、主题设置 API、manifest、README；保持 v3.3.13 地理安全规则与 v3.3.5 沉浸地球动画不变
+- 约束：写入前读取并合并完整主题设置，写入后 GET 验证；只使用已登录管理员会话写入个人 fork，不向 upstream 推送
 
 - 状态：done，按节点生成地球国旗并移除 IP 地理持久化缓存
 - 目标：让每个当前可见节点独立显示一面旗帜；删除节点后立即移除对应地球标记；不再保存 30 天 IP 地理结果
