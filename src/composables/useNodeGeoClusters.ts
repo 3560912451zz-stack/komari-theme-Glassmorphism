@@ -108,7 +108,12 @@ function nodeClusterInfo(node: NodeData, nodeId: string, ipGeoMap: ReadonlyMap<s
   // configured country's representative coordinate instead of moving its flag.
   const geoCountryMatchesRegion = !configuredCode || geoCode === configuredCode
 
-  if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng) && geoCountryMatchesRegion) {
+  const hasUsableGeoCoordinates = geo
+    && Number.isFinite(geo.lat)
+    && Number.isFinite(geo.lng)
+    && (geo.lat !== 0 || geo.lng !== 0)
+
+  if (hasUsableGeoCoordinates && geoCountryMatchesRegion) {
     const city = geo.city?.trim()
     const label = geo.cityZh || formatCityNameZh(city) || city || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
     const coord: [number, number] = [geo.lat, geo.lng]
