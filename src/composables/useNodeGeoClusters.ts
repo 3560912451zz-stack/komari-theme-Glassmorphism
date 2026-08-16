@@ -115,9 +115,12 @@ function nodeClusterInfo(node: NodeData, nodeId: string, ipGeoMap: ReadonlyMap<s
 
   if (hasUsableGeoCoordinates && geoCountryMatchesRegion) {
     const city = geo.city?.trim()
-    const label = geo.cityZh || formatCityNameZh(city) || city || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
+    const localizedCity = geo.cityZh?.trim() || formatCityNameZh(city) || city
+    const label = localizedCity || getRegionDisplayName(node.region) || getRegionDisplayName(code) || 'Unknown location'
     const coord: [number, number] = [geo.lat, geo.lng]
-    const cityKey = normalizeCityKey(city)
+    // Group by the visible localized name. A provider may return `Pyongyang`
+    // for one node and `平壤` for another node at the same location.
+    const cityKey = normalizeCityKey(localizedCity)
     return {
       locationId: cityKey ? `city:${code}:${cityKey}` : `coord:${code}:${coordinateGroupKey(coord)}`,
       code,
