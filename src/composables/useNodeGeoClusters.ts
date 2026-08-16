@@ -1,7 +1,7 @@
 import type { NodeData } from '@/stores/nodes'
 import type { IpGeo } from '@/utils/ipGeoHelper'
 import { computed, ref, watch } from 'vue'
-import { lookupNodeGeo } from '@/services/provider.service'
+import { getNodeIps, lookupNodeGeo } from '@/services/provider.service'
 import { useNodesStore } from '@/stores/nodes'
 import { formatCityNameZh } from '@/utils/cityNameHelper'
 import { getCoordByCode, getCountryCodeFromRegion } from '@/utils/geoHelper'
@@ -67,7 +67,7 @@ function regionKey(region: string | undefined | null): string {
 }
 
 function preferredNodeIp(node: NodeData): string | null {
-  return node.ipv4?.trim() || node.ipv6?.trim() || null
+  return getNodeIps(node)[0] ?? null
 }
 
 function nodeGeoKey(node: NodeData, ip: string): string {
@@ -103,7 +103,10 @@ function nodeClusterInfo(node: NodeData, nodeId: string, ipGeoMap: ReadonlyMap<s
   const configuredCode = normalizeCountryCode(regionCode)
   const geoCode = normalizeCountryCode(geo?.countryCode)
   const code = configuredCode || geoCode || 'UN'
-  const geoCountryMatchesRegion = !configuredCode || !geoCode || configuredCode === geoCode
+  // Keep the configured country and the resolved coordinate as one unit. If a
+  // provider omits country_code (or reports another country), fall back to the
+  // configured country's representative coordinate instead of moving its flag.
+  const geoCountryMatchesRegion = !configuredCode || geoCode === configuredCode
 
   if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng) && geoCountryMatchesRegion) {
     const city = geo.city?.trim()
