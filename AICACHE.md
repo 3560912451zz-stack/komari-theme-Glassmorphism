@@ -1,5 +1,13 @@
 # AI Cache / Agent Handoff Log
 
+## 2026-08-16 admin-only Antarctica marker consistency (M3/M6)
+
+- Goal: keep a configured `AQ` flag paired with an Antarctic coordinate when administrators expose hidden nodes; visitors must keep their existing public-node behavior.
+- Root cause: provider responses without a trustworthy `country_code` could still contribute city coordinates while the node's configured region supplied the flag. Administrator-only private IPs could also be sent to public geo providers and resolved to the browser's exit location.
+- Implemented: configured regions now require an exact provider country-code match before accepting provider coordinates; missing or conflicting results fall back to the configured country coordinate. RFC1918, loopback, link-local, CGNAT, documentation, multicast, unique-local, and other reserved IP literals are excluded from geo lookups.
+- Validation: `bun run lint`, `bun run type-check`, `git diff --check`, and a deterministic Bun smoke check covering `AQ` missing/mismatched/matching country codes plus reserved/public IP filtering passed.
+- Pending: commit the fix and upload it through the authenticated GitHub web flow to `3560912451zz-stack/komari-theme-Glassmorphism`; do not push to `upstream`.
+
 ## 2026-08-16 upstream v3.3.6 card fix integration (M6)
 
 - Goal: adopt the upstream fix that makes tiled-earth summary cards respect the same custom card order as the other home layouts, and add maintainability checks.
