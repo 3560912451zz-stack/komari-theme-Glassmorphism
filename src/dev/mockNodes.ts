@@ -240,6 +240,7 @@ export const mockPublicSettings: PublicSettings = {
     disablePageAnimation: false,
     homeQuickControlsEnabled: true,
     homeToolsEnabled: false,
+    cityTranslationCache: '{"v":1,"entries":{}}',
   },
   visitor_audit_enabled: false,
 }
