@@ -51,6 +51,7 @@ interface GlobeLabel {
   lat: number
   lng: number
   code: string
+  servers: number
 }
 
 const {
@@ -75,6 +76,7 @@ const labelsData = computed<GlobeLabel[]>(() => regionClusters.value.map(cluster
   lat: cluster.coord[0],
   lng: cluster.coord[1],
   code: cluster.code,
+  servers: cluster.servers,
 })))
 
 function earthTextureUrl() {
@@ -98,7 +100,17 @@ function createLabelElement(data: object): HTMLElement {
   flag.className = 'earth-label-flag'
   flag.src = `/images/flags/${label.code}.svg`
   flag.alt = label.code
-  root.appendChild(flag)
+  const frame = document.createElement('span')
+  frame.className = 'earth-label-flag-frame'
+  frame.appendChild(flag)
+  if (label.servers > 1) {
+    const count = document.createElement('span')
+    count.className = 'earth-label-count'
+    count.textContent = String(label.servers)
+    count.setAttribute('aria-label', `${label.servers} nodes`)
+    frame.appendChild(count)
+  }
+  root.appendChild(frame)
 
   return root
 }
@@ -405,10 +417,40 @@ watch(shouldRender, (visible) => {
 .earth-globe-host :deep(.earth-label-flag) {
   position: relative;
   z-index: 2;
-  width: 0.9rem;
-  height: 0.9rem;
+  width: 1.2rem;
+  height: 1.2rem;
   display: block;
-  border-radius: 0.14rem;
-  box-shadow: 0 5px 12px rgb(15 23 42 / 22%);
+  border-radius: 0.18rem;
+  box-shadow: 0 8px 20px rgb(15 23 42 / 24%);
+}
+
+.earth-globe-host :deep(.earth-label-flag-frame) {
+  position: relative;
+  display: block;
+  width: max-content;
+  height: max-content;
+}
+
+.earth-globe-host :deep(.earth-label-count) {
+  position: absolute;
+  top: -0.38rem;
+  right: -0.42rem;
+  display: inline-flex;
+  min-width: 0.9rem;
+  height: 0.9rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / 84%);
+  border-radius: 999px;
+  background: rgb(15 23 42 / 90%);
+  padding: 0 0.16rem;
+  color: white;
+  font-size: 0.56rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 3px 8px rgb(15 23 42 / 32%);
+  pointer-events: none;
 }
 </style>
