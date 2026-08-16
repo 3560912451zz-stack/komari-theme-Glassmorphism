@@ -8,6 +8,19 @@
   scrollbar-width: thin;
 }
 
+/* Keep the page scrollbar out of the visual layout; nested scrollers remain available. */
+html,
+body {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 :root {
   --background: oklch(0.935 0.015 252);
   --foreground: oklch(0.11 0.01 285.823);
