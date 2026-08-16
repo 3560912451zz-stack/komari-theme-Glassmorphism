@@ -5,6 +5,7 @@
 
 import type { Client, KomariRpc, NodeStatus } from '@/utils/rpc'
 import { REALTIME_CONFIG } from '@/constants/realtime'
+import { flushPendingCityTranslations, initializeCityTranslationService } from '@/services/cityTranslation.service'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
@@ -83,6 +84,7 @@ class InitManager {
       if (import.meta.env.DEV && import.meta.env.VITE_MOCK_NODES === 'true') {
         const { mockClients, mockPublicSettings, mockStatuses } = await import('@/dev/mockNodes')
         this.appStore.publicSettings = mockPublicSettings
+        initializeCityTranslationService(mockPublicSettings)
         this.appStore.updateLoginState(false)
         this.appStore.nodeSelectedGroup = 'all'
         this.appStore.nodeViewMode = 'card'
@@ -205,6 +207,7 @@ class InitManager {
       const api = getSharedApi()
       const publicSettings = await api.getPublicSettings()
       this.appStore.publicSettings = publicSettings
+      initializeCityTranslationService(publicSettings)
     }
     catch (error) {
       console.error('[InitManager] Failed to fetch public settings:', error)
@@ -220,6 +223,8 @@ class InitManager {
       const api = getSharedApi()
       const userInfo = await api.getMe()
       this.appStore.updateLoginState(userInfo.logged_in, userInfo)
+      if (userInfo.logged_in)
+        void flushPendingCityTranslations()
     }
     catch (error) {
       this.appStore.updateLoginState(false)

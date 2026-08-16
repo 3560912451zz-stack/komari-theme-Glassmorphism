@@ -276,6 +276,7 @@ export class KomariApi {
       const response = await fetch(url, {
         method: 'GET',
         credentials: 'include', // 携带 Cookie
+        cache: 'no-store',
         signal: controller.signal,
       })
 
@@ -316,6 +317,7 @@ export class KomariApi {
       const response = await fetch(url, {
         method: 'GET',
         credentials: 'include',
+        cache: 'no-store',
         signal: controller.signal,
       })
 
@@ -373,14 +375,14 @@ export class KomariApi {
         return result as T
       }
 
-      // 检查 API 响应状态
-      if (!isApiResponse<T>(result))
+      // UpdateThemeSettings returns a successful envelope without a data field.
+      const apiResult = result as Record<string, unknown>
+      if (apiResult.status !== 'success' && apiResult.status !== 'error')
         throw new ApiError(response.ok ? 'Invalid API response' : `HTTP error: ${response.status}`, 'error', response.status)
-      if (result.status === 'error') {
-        throw new ApiError(result.message || 'Unknown error', 'error', response.status)
-      }
+      if (apiResult.status === 'error')
+        throw new ApiError(typeof apiResult.message === 'string' ? apiResult.message : 'Unknown error', 'error', response.status)
 
-      return result.data
+      return apiResult.data as T
     }
     catch (error) {
       clearTimeout(timeoutId)
@@ -410,6 +412,11 @@ export class KomariApi {
    */
   async getPublicSettings(): Promise<PublicSettings> {
     return this.get<PublicSettings>('/public')
+  }
+
+  /** Replace the managed settings for an installed theme (administrator only). */
+  async updateThemeSettings(theme: string, settings: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+    await this.post<void>(`/admin/theme/settings?theme=${encodeURIComponent(theme)}`, settings, signal)
   }
 
   /**

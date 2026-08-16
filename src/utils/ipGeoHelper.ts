@@ -1,8 +1,7 @@
-import { translateCityNameZh } from '@/utils/cityNameHelper'
-
 /**
  * Resolve IP geolocation through a small provider fallback chain.
- * Results stay in the active page session only; no persistent browser cache is used.
+ * This low-level helper returns raw geographic data; city localization belongs
+ * to the provider service so every consumer shares the server-backed cache.
  */
 
 export interface IpGeo {
@@ -304,8 +303,7 @@ export async function lookupIpGeo(ip: string): Promise<IpGeo | null> {
         const geo = await provider.lookup(normalizedIp)
         if (geo && isValidGeo(geo)) {
           markProviderSuccess(provider.id)
-          const cityZh = await translateCityNameZh(geo.city)
-          return cityZh ? { ...geo, cityZh } : geo
+          return geo
         }
         markProviderFailure(provider.id)
       }
