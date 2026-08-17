@@ -153,7 +153,6 @@ function bindLabelRef(id: string) {
 const cobeLabels = computed(() => regionClusters.value.map(cluster => ({
   id: cluster.id,
   code: cluster.code,
-  servers: cluster.servers,
 })))
 
 const themeColors = computed(() => {
@@ -380,16 +379,10 @@ function onPointerUp(e: PointerEvent) {
       :ref="bindLabelRef(label.id)"
       class="absolute left-0 top-0 z-3 rounded-[0.18rem] transition-[opacity,filter] duration-300"
     >
-      <span class="earth-flag-frame">
-        <img
-          :src="`/images/flags/${label.code}.svg`" :alt="label.code"
-          class="block size-5 rounded-[0.18rem] shadow-[0_8px_20px_rgb(15_23_42/0.24)]"
-        >
-        <span
-          v-if="label.servers > 1"
-          class="earth-flag-count"
-        >{{ label.servers }}</span>
-      </span>
+      <img
+        :src="`/images/flags/${label.code}.svg`" :alt="label.code"
+        class="block size-5 rounded-[0.18rem] shadow-[0_8px_20px_rgb(15_23_42/0.24)]"
+      >
     </div>
 
     <div
@@ -412,34 +405,5 @@ function onPointerUp(e: PointerEvent) {
 .earth-globe-canvas {
   contain: layout paint;
   filter: blur(0.5px); /* 轻微模糊柔化点阵，进一步抑制旋转时的摩尔纹 */
-}
-.earth-flag-frame {
-  position: relative;
-  display: block;
-  width: max-content;
-  height: max-content;
-}
-
-.earth-flag-count {
-  position: absolute;
-  top: -0.38rem;
-  right: -0.42rem;
-  display: inline-flex;
-  min-width: 0.9rem;
-  height: 0.9rem;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgb(255 255 255 / 84%);
-  border-radius: 999px;
-  background: rgb(15 23 42 / 90%);
-  padding: 0 0.16rem;
-  color: white;
-  font-size: 0.56rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 800;
-  line-height: 1;
-  white-space: nowrap;
-  box-shadow: 0 3px 8px rgb(15 23 42 / 32%);
-  pointer-events: none;
 }
 </style>

@@ -27,7 +27,6 @@ interface ClusterMarker {
   id: string
   index: number
   code: string
-  servers: number
   label: string
   meta: string
   x: number
@@ -71,14 +70,6 @@ function projectCoord(coord: [number, number]): MapPoint {
   }
 }
 
-function countBadgeWidth(count: number): number {
-  if (count > 99)
-    return 25
-  if (count > 9)
-    return 20
-  return 15
-}
-
 function formatClusterMeta(cluster: { code: string, label: string, asn?: string, org?: string }): string {
   const location = cluster.label || cluster.code || 'NODE'
   const provider = cluster.asn || cluster.org
@@ -91,7 +82,6 @@ const clusterMarkers = computed<ClusterMarker[]>(() => regionClusters.value.map(
     id: cluster.id,
     index: index + 1,
     code: cluster.code,
-    servers: cluster.servers,
     label: cluster.nodeName,
     meta: formatClusterMeta(cluster),
     x: point.x,
@@ -132,20 +122,6 @@ const clusterMarkers = computed<ClusterMarker[]>(() => regionClusters.value.map(
                 preserveAspectRatio="xMidYMid slice"
                 class="map-flag"
               />
-              <g
-                v-if="marker.servers > 1"
-                class="map-count-badge"
-                :transform="`translate(${marker.x + 11}, ${marker.y - 34})`"
-              >
-                <rect
-                  :x="-countBadgeWidth(marker.servers) / 2"
-                  y="-8"
-                  :width="countBadgeWidth(marker.servers)"
-                  height="16"
-                  rx="8"
-                />
-                <text x="0" y="0.5" text-anchor="middle" dominant-baseline="middle">{{ marker.servers }}</text>
-              </g>
             </template>
           </g>
         </svg>
@@ -271,26 +247,6 @@ const clusterMarkers = computed<ClusterMarker[]>(() => regionClusters.value.map(
   overflow: hidden;
   clip-path: inset(0 round 1.6px);
   filter: drop-shadow(0 3px 5px rgb(15 23 42 / 0.32));
-}
-
-.map-count-badge {
-  pointer-events: none;
-}
-
-.map-count-badge rect {
-  fill: rgb(15 23 42 / 90%);
-  stroke: rgb(255 255 255 / 84%);
-  stroke-width: 1.4;
-  vector-effect: non-scaling-stroke;
-}
-
-.map-count-badge text {
-  fill: white;
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 800;
-  pointer-events: none;
 }
 
 .legend-panel {
